@@ -1,11 +1,15 @@
 # Curo API Contract (DRAFT for review)
 
-Status: **DRAFT v0.2, not yet agreed.** Owner: Vasuki (backend/frontend). Consumers: frontend (Vasuki), patient-app (Sangami), infra (Surya).
+Status: **DRAFT v0.3, not yet agreed.** Owner: Vasuki (backend/frontend). Consumers: frontend (Vasuki), patient-app (Sangami), infra (Surya).
 Any change to this file ships in the same commit as the code change and is announced (CLAUDE.md).
 
 Derived by reading the old apps in `_reference/` (hospital-backend, hospital-site, patient-app). All sample data below is fake.
 
 **Changes in v0.2:** AccessGrants and access log (section 3); prescription versions, modify, discontinue and history (section 7); medication profile, dose schedule and dose log (section 8); interaction and allergy check, non-blocking (section 9); alerts, caregiver links, adherence and the scheduler endpoint (section 10); nearby pharmacies with coordinates (section 11); licence fields in signup (section 2); `/auth/consent` renamed `/auth/policy-consent`; one consent field name (`consent`); soft delete on `DELETE /patient/me`; `GET /hospital/list` stays public; RECEPTION folded into ADMIN, SUPER_ADMIN kept; password reset dropped from the MVP. Sections after 2 were renumbered.
+
+**Changes since v0.3 (access grants built):** share codes are six digits; guard, audit and rate-limit behaviour documented in section 3; `/patient/**` is no longer public.
+
+**Changes in v0.3:** `name` is the only name field for every role (`fullName` removed). Licence signup rewritten (section 2): doctors send `licenceNumber`, `stateCouncil`, `name`; pharmacies send `drugLicenceNumber`, `gstin`, `state`, `name`. The response carries `verificationStatus` (`VERIFIED` or `PENDING`) with `verificationReasonCode` and `verificationReason`, replacing `status` / `statusReason`. `VERIFIED` only on a match against a mock `licence_registry`; otherwise `PENDING` for SUPER_ADMIN approval. Wrong number format, wrong name, wrong state and wrong GSTIN return distinct 400 codes; a duplicate licence returns 409. GSTIN validation rules added. The sample GSTIN in the pharmacy example was replaced because the old one failed the check character.
 
 ## 1. Conventions
 
@@ -49,11 +53,11 @@ Creates an account with recorded consent and issues a CareID. Consent is mandato
 // request
 {
   "role": "DOCTOR",
-  "fullName": "Dr Test Doctor",
+  "name": "Anjali Varadarajan",
   "phone": "9000000002",
   "password": "min 8 chars",
   "facilityId": "665f0000000000000000b001",
-  "licenceNumber": "TN-12345",
+  "licenceNumber": "TN-48213",
   "stateCouncil": "Tamil Nadu Medical Council",
   "consent": { "accepted": true, "policyVersion": "2026-10-01" }
 }
@@ -61,54 +65,94 @@ Creates an account with recorded consent and issues a CareID. Consent is mandato
 {
   "id": "665f0000000000000000a002",
   "careId": "CID-4HN8XD",
-  "fullName": "Dr Test Doctor",
+  "name": "Anjali Varadarajan",
   "role": "DOCTOR",
-  "status": "VERIFIED",
-  "statusReason": null,
+  "verificationStatus": "VERIFIED",
+  "verificationReasonCode": "LICENCE_MATCHED",
+  "verificationReason": "Licence number, name and council match the licence registry.",
   "consent": { "accepted": true, "policyVersion": "2026-10-01", "acceptedAt": "2026-10-23T10:20:00Z" }
 }
 ```
 
-**PHARMACY** (licence fields required when `facilityId` is omitted, because signup then creates the pharmacy facility; if `facilityId` of an existing VERIFIED facility is sent, only the account fields are needed)
+**PHARMACY** (`name` is the licensed pharmacy / licensee name exactly as on the drug licence; there is no separate person name in the MVP. Licence fields are required when `facilityId` is omitted, because signup then creates the pharmacy facility; if `facilityId` of an existing VERIFIED facility is sent, only the account fields are needed)
 ```json
 // request
 {
   "role": "PHARMACY",
-  "fullName": "Test Pharmacist",
-  "name": "Test Pharmacy",
+  "name": "Sri Velan Medicals",
   "phone": "9000000003",
   "password": "min 8 chars",
-  "drugLicenceNumber": "TN/DL/12345",
-  "gstin": "33AAAAA0000A1Z5",
+  "drugLicenceNumber": "TN/CHE/20B-48213",
+  "gstin": "33AAGFS4821K1Z5",
   "state": "TN",
   "address": "1 Test Street, Chennai",
   "lat": 13.0827,
   "lng": 80.2707,
   "consent": { "accepted": true, "policyVersion": "2026-10-01" }
 }
-// 201 response
+// 201 response, number well-formed but not in the registry
 {
   "id": "665f0000000000000000a003",
   "careId": "CID-9PW2TC",
-  "fullName": "Test Pharmacist",
+  "name": "Sri Velan Medicals",
   "role": "PHARMACY",
   "facilityId": "665f0000000000000000c001",
-  "status": "PENDING",
-  "statusReason": "LICENCE_FORMAT_UNRECOGNISED",
+  "verificationStatus": "PENDING",
+  "verificationReasonCode": "LICENCE_NOT_IN_REGISTRY",
+  "verificationReason": "Licence number was not found in the licence registry. A SUPER_ADMIN will review it.",
   "consent": { "accepted": true, "policyVersion": "2026-10-01", "acceptedAt": "2026-10-23T10:25:00Z" }
 }
 ```
 `lat`/`lng` are optional; if omitted the server geocodes `address` with AWS Location Service. If both fail the facility is saved without a location and does not appear in `/pharmacies/nearby` until fixed.
 
-**Status rules (DOCTOR and PHARMACY only; the `status` field is absent for PATIENT and CAREGIVER)**
-- `VERIFIED`: all licence fields present, formats valid, not a duplicate, state/council recognised. **This means format-checked and unique, not confirmed against any government registry** (no ABDM/HPR call is made).
-- `PENDING`: fields present but not machine-verifiable (for example an unrecognised council format). A SUPER_ADMIN reviews it (see below). A PENDING user cannot log in (403 `ACCOUNT_PENDING`).
-- Hard failures return 400, not PENDING: missing licence field (`LICENCE_FIELDS_REQUIRED`), malformed GSTIN (`INVALID_GSTIN`, regex in section 4), unknown `state`.
-- Format rules are placeholders to confirm: `licenceNumber` `^[A-Za-z0-9/\-]{4,25}$`; `drugLicenceNumber` `^[A-Za-z0-9/\-]{5,30}$`; `state` is an ISO 3166-2:IN code (`TN`, `KA`, ...); `stateCouncil` must be on a server-side list.
-- Duplicate licence (same licence number and council or state): 409 `LICENCE_TAKEN`.
+**`name` is the only name field** for every role (the earlier `fullName` is gone). For PATIENT/CAREGIVER/DOCTOR it is the person's name; for PHARMACY it is the licensee name above.
+
+**Licence verification (DOCTOR and PHARMACY only; `verificationStatus`, `verificationReasonCode` and `verificationReason` are absent for PATIENT and CAREGIVER)**
+
+The server asks a `LicenceVerificationService`. The MVP implementation is a **mock registry**: a `licence_registry` MongoDB collection of invented records, switched on by `licence.verification.mode=mock`. No government registry is called, so VERIFIED here means "matches the mock registry". The same contract holds when a real registry replaces it.
+
+Checks run in this order and stop at the first failure:
+| # | Check | Outcome |
+|---|---|---|
+| 1 | Required fields present (doctor: `licenceNumber`, `stateCouncil`, `name`; pharmacy: `drugLicenceNumber`, `gstin`, `state`, `name`) | 400 `LICENCE_FIELDS_REQUIRED` |
+| 2 | Licence number format | 400 `INVALID_LICENCE_NUMBER` |
+| 3 | Pharmacy only: `state` is an ISO 3166-2:IN code | 400 `INVALID_STATE` |
+| 4 | Pharmacy only: GSTIN is valid (below) | 400 `INVALID_GSTIN`, or 400 `GSTIN_STATE_MISMATCH` if its state code is not the `state` sent |
+| 5 | Licence number already used by another account | 409 `LICENCE_TAKEN` |
+| 6 | Number found in the registry but the **name** differs | 400 `LICENCE_NAME_MISMATCH` |
+| 7 | Number found but the **state** differs (`stateCouncil` for doctors, `state` for pharmacies) | 400 `LICENCE_STATE_MISMATCH` |
+| 8 | Pharmacy only: number found but the **GSTIN** differs | 400 `LICENCE_GSTIN_MISMATCH` |
+| 9 | Number well-formed but **not in the registry** | 201, `verificationStatus: "PENDING"`, `verificationReasonCode: "LICENCE_NOT_IN_REGISTRY"` |
+| 10 | Everything matches | 201, `verificationStatus: "VERIFIED"`, `verificationReasonCode: "LICENCE_MATCHED"` |
+
+- `VERIFIED` only on an exact match against the mock registry (names compared ignoring case, spacing, punctuation and titles such as "Dr"). Nothing else can produce VERIFIED.
+- `PENDING`: waits for a SUPER_ADMIN to approve or reject (see below). A PENDING user cannot log in (403 `ACCOUNT_PENDING`); a rejected one gets 403 `ACCOUNT_REJECTED`.
+- Error messages never repeat what the registry holds (no names, states or GSTINs of the matched record).
+- Licence number comparison ignores case and surrounding spaces; stored in upper case.
+- Formats (placeholders to confirm): `licenceNumber` `^[A-Za-z0-9/\-]{4,25}$`; `drugLicenceNumber` `^[A-Za-z0-9/\-]{5,30}$`; `state` an ISO 3166-2:IN code (`TN`, `KA`, ...); `stateCouncil` compared by name with the registry's council.
+- Mock registry data lives in code (`LicenceRegistrySeed`), seeded on startup: 10 invented doctors and 5 invented pharmacies, all fictional.
+
+**GSTIN validation** (15 characters, upper case, applied before any registry lookup):
+1. Format `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$` (state code, PAN, entity number, literal `Z`, check character).
+2. The first two digits are a known GST state code, and that code belongs to the `state` sent (for example `33` is `TN`).
+3. The last character is the standard GSTIN check character (base-36 weighted checksum over the first 14 characters). This checks the number is well formed; it does not prove the GSTIN is registered.
+
+**Licence signup error codes** (body `{ "error": "<code>", "message": "..." }`; messages never repeat registry data)
+| Code | HTTP | Meaning | Roles |
+|---|---|---|---|
+| `LICENCE_FIELDS_REQUIRED` | 400 | A required licence field is missing or blank | DOCTOR, PHARMACY |
+| `INVALID_LICENCE_NUMBER` | 400 | Licence number is not in a recognised format | DOCTOR, PHARMACY |
+| `INVALID_STATE` | 400 | `state` is not an ISO 3166-2:IN code such as `TN` | PHARMACY |
+| `INVALID_GSTIN` | 400 | GSTIN has the wrong length or pattern, an unknown state code, or a wrong check character | PHARMACY |
+| `GSTIN_STATE_MISMATCH` | 400 | GSTIN is well formed but its state code belongs to a different state than `state` | PHARMACY |
+| `LICENCE_TAKEN` | 409 | Another account already uses this licence number | DOCTOR, PHARMACY |
+| `LICENCE_NAME_MISMATCH` | 400 | Number is in the registry but `name` differs | DOCTOR, PHARMACY |
+| `LICENCE_STATE_MISMATCH` | 400 | Number is in the registry but `stateCouncil` (doctor) or `state` (pharmacy) differs | DOCTOR, PHARMACY |
+| `LICENCE_GSTIN_MISMATCH` | 400 | Number is in the registry but `gstin` differs | PHARMACY |
+
+A number that is well formed but not in the registry is not an error: it returns 201 with `verificationStatus: "PENDING"` and `verificationReasonCode: "LICENCE_NOT_IN_REGISTRY"`. If the registry could not be seeded (database down at startup), every well-formed number takes that path until it is seeded.
 
 Other errors: 400 `CONSENT_REQUIRED`, 400 `WEAK_PASSWORD`, 409 `PHONE_TAKEN` (a soft-deleted account's phone stays taken until its data is purged). The consent timestamp (`acceptedAt`) is set server-side; clients never send timestamps.
-`name` is used for PATIENT/CAREGIVER and for the pharmacy facility name; `fullName` is used for DOCTOR and the pharmacist (matches the old `Staff.fullName`). Responses always echo the field that was sent.
 
 **CareID format:** `CID-` followed by 6 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no 0/O/1/I). Generated server-side with a cryptographically secure RNG, unique index, retry on collision. Regex: `^CID-[A-HJ-NP-Z2-9]{6}$`. Immutable once issued and never reused, even after account deletion.
 
@@ -124,11 +168,11 @@ Other errors: 400 `CONSENT_REQUIRED`, 400 `WEAK_PASSWORD`, 409 `PHONE_TAKEN` (a 
             "facilityId": null, "facilityName": null, "profileCompleted": false }
 }
 ```
-JWT claims: `sub` (user id), `role`, `careId`, `facilityId` (nullable). Errors: 401 `INVALID_CREDENTIALS` (same message for unknown user, wrong password and deleted account), 403 `ACCOUNT_PENDING`.
-Old response was `{token, username, role, fullName, hospitalName}`; old claims were `role, facilityId, facilityName, specialization, staffId`.
+JWT claims: `sub` (user id), `role`, `careId`, `facilityId` (nullable). Errors: 401 `INVALID_CREDENTIALS` (same message for unknown user, wrong password and deleted account), 403 `ACCOUNT_PENDING` (DOCTOR or PHARMACY awaiting SUPER_ADMIN approval; checked after the password), 403 `ACCOUNT_REJECTED`.
+Old response was `{token, username, role, hospitalName}` plus a separate full-name field; old claims were `role, facilityId, facilityName, specialization, staffId`.
 
 ### NEW: GET /auth/me (any role)
-Returns the `user` object above plus `consent`, and `status` for DOCTOR/PHARMACY.
+Returns the `user` object above plus `consent`, and `verificationStatus`, `verificationReasonCode`, `verificationReason` for DOCTOR/PHARMACY.
 
 ### NEW: POST /auth/policy-consent (any role)  (renamed from /auth/consent)
 Records withdrawal or re-acceptance of the privacy policy. Not the same thing as an AccessGrant (section 3), which controls who may see which patient's data.
@@ -141,14 +185,14 @@ Records withdrawal or re-acceptance of the privacy policy. Not the same thing as
 Withdrawal blocks new prescriptions for that CareID.
 
 ### NEW: GET /careid/{careId} (DOCTOR, PHARMACY; active grant required)
-Gated (section 3, scope `PROFILE`); 403 `NO_ACTIVE_GRANT` otherwise. Returns `{ "careId", "name", "ageYears", "gender", "consent": { "accepted": true } }`. 404 if unknown (only after the grant check, so an unknown CareID and an ungranted one are indistinguishable: both return 403 `NO_ACTIVE_GRANT`). Never returns phone or full record. To get access to a CareID, start with `POST /access-grants`.
+Gated (section 3, scope `PROFILE`); 403 `NO_ACTIVE_GRANT` otherwise. Returns `{ "careId", "name", "ageYears", "gender", "consent": { "accepted": true } }`. 404 if unknown (only after the grant check, so an unknown CareID and an ungranted one are indistinguishable: both return 403 `NO_ACTIVE_GRANT`). Never returns phone or full record. `ageYears` and `gender` are left out of the response until the patient profile is stored. To get access to a CareID, start with `POST /access-grants`.
 
 ### NEW: Staff account review (SUPER_ADMIN)
 | Method + path | Request | Response |
 |---|---|---|
-| `GET /admin/users?status=PENDING` | none | paged `[{id,careId,role,fullName,facilityId,licenceNumber,stateCouncil,drugLicenceNumber,gstin,state,status,statusReason,createdAt}]` |
-| `POST /admin/users/{id}/verify` | none | user with `status:"VERIFIED"` |
-| `POST /admin/users/{id}/reject` | `{reason}` | user with `status:"REJECTED"` |
+| `GET /admin/users?verificationStatus=PENDING` | none | paged `[{id,careId,role,name,facilityId,licenceNumber,stateCouncil,drugLicenceNumber,gstin,state,verificationStatus,verificationReasonCode,verificationReason,createdAt}]` |
+| `POST /admin/users/{id}/verify` | none | user with `verificationStatus:"VERIFIED"` (the user can then log in) |
+| `POST /admin/users/{id}/reject` | `{reason}` | user with `verificationStatus:"REJECTED"` (login returns 403 `ACCOUNT_REJECTED`) |
 
 ### DROP: POST /auth/send-otp, POST /auth/reset-password (from patient-app)
 Password reset is out of the MVP (old behaviour also returned the OTP in the response body, which must never ship). A forgotten password in the MVP means a SUPER_ADMIN-assisted reset outside this API. To be re-added later as NEW endpoints.
@@ -182,7 +226,7 @@ Old staff registration with `hprId` / `hprVerified`. Replaced by `/auth/signup` 
 - Duration: patient picks on approval; defaults and limits are configurable (proposed: default 24 h, max 720 h for CLINICAL and PHARMACY). CAREGIVER grants have no expiry until revoked.
 
 **Share code (NEW, needed for "request by share code")**
-`POST /patient/me/share-codes` (PATIENT), request `{ "scope": ["PROFILE","PRESCRIPTIONS"], "durationHours": 24 }`, response `{ "shareCode": "SHR-4TQ7ZK", "expiresAt": "2026-10-23T10:45:00Z" }`. Format `SHR-` plus 6 characters from the CareID alphabet. Single use, valid 15 minutes (configurable). Showing the code to a clinician is the patient's approval in advance.
+`POST /patient/me/share-codes` (PATIENT), request `{ "scope": ["PROFILE","PRESCRIPTIONS"], "durationHours": 24 }`, response `201 { "shareCode": "042913", "expiresAt": "2026-10-23T10:45:00Z" }`. The code is **six digits** (leading zeros allowed), single use, valid 15 minutes (configurable). Showing the code to a clinician is the patient's approval in advance. Because six digits can be guessed, each user is limited to 5 wrong codes per 15 minutes: further attempts get `429 TOO_MANY_ATTEMPTS` until the window passes. A code that is not found, malformed or already used is `404 INVALID_SHARE_CODE`; an expired one is `410 SHARE_CODE_EXPIRED` (once the database has removed it, `404`).
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
@@ -206,6 +250,13 @@ Old staff registration with `hprId` / `hprVerified`. Replaced by `/auth/signup` 
 }
 ```
 `action`: `READ`, `WRITE`, `QR_SCAN`, `GRANT_REQUESTED`, `GRANT_APPROVED`, `GRANT_REVOKED`, `GRANT_EXPIRED`. `outcome`: `ALLOWED` or `DENIED` (denied attempts are logged too, with `grantId: null`). The log is append-only; revoking a grant or soft-deleting the account does not remove entries.
+
+Behaviour of the log and the guard:
+- Every patient-data call goes through one check (`AccessGuard`). It needs a suitable role **and** an active, unexpired grant for that CareID and scope, otherwise `403 NO_ACTIVE_GRANT`. A refusal never says why, so an unknown CareID and an ungranted one look identical.
+- **Fail closed:** if an allowed access cannot be written to the log, it is refused with `500 AUDIT_UNAVAILABLE`. Failing to log a refusal or a grant change never changes the response.
+- Entries hold ids and names only, never the patient data that was read. The application never updates or deletes them.
+- Grants expire lazily: an ACTIVE grant past `expiresAt` always reads as `EXPIRED`, and the stored status and a `GRANT_EXPIRED` entry (actor role `SYSTEM`) are written the first time it is seen.
+- `from` / `to` are ISO-8601 instants (`from` inclusive, `to` exclusive); a bad value is `400 VALIDATION_ERROR`. `actorRole` is case-insensitive.
 
 **Endpoints covered by the grant rule**
 
@@ -243,8 +294,8 @@ Change: `?adminUsername=` query param is removed; the verifying admin comes from
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| KEEP | `GET /staff/doctors/{hospitalId}` | DOCTOR, ADMIN | none | `[{id,fullName,specialization,available:true}]`, or when on leave `[{id,fullName,specialization,available:false,leaveUntil,reason,substituteId,substituteName}]` |
-| CHANGE | `GET /doctor/profile` | DOCTOR | none | `{fullName,username,specialization,licenceNumber,stateCouncil,status}`. Dropped: `hprId`, `hprVerified`, `hprDetails` (the old `hprDetails` was hardcoded fake data) |
+| KEEP | `GET /staff/doctors/{hospitalId}` | DOCTOR, ADMIN | none | `[{id,name,specialization,available:true}]`, or when on leave `[{id,name,specialization,available:false,leaveUntil,reason,substituteId,substituteName}]` |
+| CHANGE | `GET /doctor/profile` | DOCTOR | none | `{name,username,specialization,licenceNumber,stateCouncil,verificationStatus}`. Dropped: `hprId`, `hprVerified`, `hprDetails` (the old `hprDetails` was hardcoded fake data) |
 | KEEP | `POST /doctor/leave/mark` | DOCTOR | `{leaveFrom:"2026-11-01",leaveUntil:"2026-11-03",reason:"...",substituteDoctorId}` | DoctorLeave `{id,doctorId,leaveFrom,leaveUntil,reason,substituteDoctorId,status:"ACTIVE"}`. 400 if substitute is self |
 | KEEP | `GET /doctor/leave/mine` | DOCTOR | none | active DoctorLeave or `null` |
 | KEEP | `POST /doctor/leave/{id}/end` | DOCTOR | none | DoctorLeave. 403 if not own leave, 404 unknown |
@@ -507,14 +558,17 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 ## 15. Open questions (need your decision)
 
 1. **SUPER_ADMIN is not in the CLAUDE.md role list** (`DOCTOR, PATIENT, CAREGIVER, PHARMACY, ADMIN`). This contract keeps it as asked. CLAUDE.md is shared memory and needs the same edit; I have not changed it.
-2. **Auto-VERIFIED on format only.** Signup marks a doctor or pharmacy `VERIFIED` when licence formats pass and are unique, with no registry check. Acceptable for the MVP? The format rules in section 2 are placeholders.
+2. **Mock registry only.** `VERIFIED` currently means "matches the invented `licence_registry`", not a real council or drug-controller record. A real registry integration is future work behind the same `LicenceVerificationService` interface. The format rules in section 2 are placeholders.
 3. **Pharmacy QR exception.** A QR scan creates a PHARMACY grant for that one prescription. Confirm, or require the patient to approve every pharmacy.
 4. **Check-in is not gated.** The front desk (ADMIN) stores only the CareID and typed name; the doctor then requests a grant. Confirm, or auto-create a grant request at check-in.
-5. **Share codes are my addition** (`POST /patient/me/share-codes`), needed for "request by share code". Confirm shape, 15-minute validity and the `SHR-` prefix.
+5. **Share codes** (`POST /patient/me/share-codes`) are six digits as requested (the earlier `SHR-` format is gone). Confirm the 15-minute validity and the limit of 5 wrong codes per 15 minutes. The limiter is in memory, so it resets on restart and is per server instance.
 6. **No break-glass.** ADMIN/SUPER_ADMIN and clinicians in an emergency cannot bypass a missing grant. Add an audited emergency override later?
 7. **Retention window** for soft-deleted accounts before purge (proposed 30 days; a legal review is needed for prescription records).
-8. **`name` vs `fullName`.** Doctor and pharmacist signup use `fullName` as requested; patient and caregiver use `name`. Unify to one?
-9. **`GET /pharmacy-facility/list`** stays authenticated while `GET /hospital/list` is public. Intended?
-10. **Scheduler timings** (reminder lead 10 min, missed grace 30 min, run every 5 min) and the EventBridge/API-destination setup are proposals for Surya.
-11. **Consent storage:** one versioned object on the user (as drafted) vs a separate collection with history.
-12. **Merge:** old patient-app service endpoints (`/patient/me*`, risk, prescription verify/dispense) are folded into this one backend. Confirm.
+8. **`GET /pharmacy-facility/list`** stays authenticated while `GET /hospital/list` is public. Intended?
+9. **Scheduler timings** (reminder lead 10 min, missed grace 30 min, run every 5 min) and the EventBridge/API-destination setup are proposals for Surya.
+10. **Consent storage:** one versioned object on the user (as drafted) vs a separate collection with history.
+11. **Merge:** old patient-app service endpoints (`/patient/me*`, risk, prescription verify/dispense) are folded into this one backend. Confirm.
+12. **"Wrong number" is read as a malformed licence number** (`INVALID_LICENCE_NUMBER`). A well-formed number that is simply not in the registry becomes `PENDING` rather than an error, otherwise nothing could ever be PENDING. Confirm, or make unlisted numbers a hard error.
+13. **Pharmacy `name` is the licensee name on the drug licence**, since `name` is now the only name field. There is no separate pharmacist name in the MVP. Confirm.
+14. **Deferred in code:** `facilityId`, `address`, `lat` and `lng` on signup are in this contract but are not stored or validated until hospitals and pharmacy facilities are ported off the legacy JPA models.
+15. **Pending requests never expire** and nothing yet notifies the patient of a new request (alerts are not built). Add an expiry and the `GRANT_REQUEST` alert?
