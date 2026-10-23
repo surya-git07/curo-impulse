@@ -2,6 +2,7 @@ package com.curo.curo_backend.service;
 
 import com.curo.curo_backend.dto.LoginRequest;
 import com.curo.curo_backend.dto.LoginResponse;
+import com.curo.curo_backend.dto.MeView;
 import com.curo.curo_backend.dto.SignupRequest;
 import com.curo.curo_backend.dto.SignupResponse;
 import com.curo.curo_backend.dto.UserSummary;
@@ -55,6 +56,9 @@ public class AuthService {
 
     @Autowired
     private LicenceVerificationService licenceVerificationService;
+
+    @Autowired
+    private CurrentUserService currentUser;
 
     // Compared against when the user does not exist, so unknown and wrong-password logins cost the same
     private String dummyHash;
@@ -163,6 +167,17 @@ public class AuthService {
         UserSummary summary = new UserSummary(user.getId(), user.getCareId(), user.getName(), user.getRole(),
                 user.getFacilityId(), user.getFacilityName(), user.isProfileCompleted());
         return new LoginResponse(token, expiresAt, summary);
+    }
+
+    /** The signed-in user (any role): the login user object plus consent, and verification status for licenced roles. */
+    public MeView me() {
+        AppUser u = currentUser.require();
+        boolean licenced = DOCTOR.equals(u.getRole()) || PHARMACY.equals(u.getRole());
+        return new MeView(u.getId(), u.getCareId(), u.getName(), u.getRole(), u.getFacilityId(), u.getFacilityName(),
+                u.isProfileCompleted(), u.getConsent(),
+                licenced ? u.getVerificationStatus() : null,
+                licenced ? u.getVerificationReasonCode() : null,
+                licenced ? u.getVerificationReason() : null);
     }
 
     private void checkDoctorLicence(SignupRequest request, AppUser user) {

@@ -78,7 +78,9 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/dose-schedule").hasAnyRole("DOCTOR", "CAREGIVER")
                         .requestMatchers("/caregiver-links", "/caregiver-links/**").hasAnyRole("PATIENT", "CAREGIVER")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/prescription/*/history").hasAnyRole("DOCTOR", "PHARMACY")
-                        .requestMatchers("/auth/**", "/hospital/**", "/pharmacy-facility/**").permitAll()
+                        // only signup and login are public; everything else under /auth (such as /auth/me) needs a valid token
+                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/auth/signup", "/auth/login").permitAll()
+                        .requestMatchers("/hospital/**", "/pharmacy-facility/**").permitAll()
                         .requestMatchers("/drugs/**").hasAnyRole("DOCTOR", "ADMIN", "PHARMACY")
                         .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/reception/visit/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/reception/queue/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")

@@ -13,6 +13,8 @@ Derived by reading the old apps in `_reference/` (hospital-backend, hospital-sit
 
 **Changes since v0.3 (pharmacy finder and stock removed):** `GET /pharmacies/nearby`, `GET` and `PUT /pharmacy/stock/{id}`, coordinates (`lat`/`lng`) on signup and the stock and distance machinery are gone. `POST /pharmacy/dispense` stays: it marks the prescription `DISPENSED` and writes a dispensing log, with no stock check or reduction.
 
+**Changes since v0.3 (build-status audit):** every endpoint in this file was checked against the controllers on `main`. Those with no active mapping are marked **NOT BUILT** (in the Status column, or in the heading). Most of them exist only as disabled legacy code (`@Profile("legacy-jpa")`, which is off by default), so a client that calls them gets 404 or 403 today. `GET /auth/me` is the one endpoint added in this pass. `GET /patient/me/prescriptions/detailed` is NOT BUILT and replaced by `GET /patient/me/medications` (section 12). Only `/auth/signup` and `/auth/login` are public under `/auth`.
+
 **Changes in v0.3:** `name` is the only name field for every role (`fullName` removed). Licence signup rewritten (section 2): doctors send `licenceNumber`, `stateCouncil`, `name`; pharmacies send `drugLicenceNumber`, `gstin`, `state`, `name`. The response carries `verificationStatus` (`VERIFIED` or `PENDING`) with `verificationReasonCode` and `verificationReason`, replacing `status` / `statusReason`. `VERIFIED` only on a match against a mock `licence_registry`; otherwise `PENDING` for SUPER_ADMIN approval. Wrong number format, wrong name, wrong state and wrong GSTIN return distinct 400 codes; a duplicate licence returns 409. GSTIN validation rules added. The sample GSTIN in the pharmacy example was replaced because the old one failed the check character.
 
 ## 1. Conventions
@@ -25,7 +27,7 @@ Derived by reading the old apps in `_reference/` (hospital-backend, hospital-sit
 - Errors: the old backend returned bare strings as bodies. New contract: `{ "error": "CODE", "message": "human text" }` with the same HTTP statuses.
 - Paged lists (new endpoints only): `?page=0&size=20` (size max 100), response `{ "page": 0, "size": 20, "total": 134, "items": [ ... ] }`. Older endpoints keep returning plain arrays.
 - Timestamps are ISO-8601 UTC strings. Dates are `YYYY-MM-DD`.
-- Status legend: **KEEP** (same behaviour), **CHANGE** (kept, shape or auth changes), **NEW**, **DROP** (not carried over).
+- Status legend: **KEEP** (same behaviour), **CHANGE** (kept, shape or auth changes), **NEW**, **DROP** (not carried over). **NOT BUILT** is added to a row's status when the endpoint has no active controller mapping on `main`; the rest of the row describes the intended contract, not current behaviour. A row without that tag is mapped.
 
 ## 2. Identity and auth
 
@@ -173,10 +175,19 @@ Other errors: 400 `CONSENT_REQUIRED`, 400 `WEAK_PASSWORD`, 409 `PHONE_TAKEN` (a 
 JWT claims: `sub` (user id), `role`, `careId`, `facilityId` (nullable). Errors: 401 `INVALID_CREDENTIALS` (same message for unknown user, wrong password and deleted account), 403 `ACCOUNT_PENDING` (DOCTOR or PHARMACY awaiting SUPER_ADMIN approval; checked after the password), 403 `ACCOUNT_REJECTED`.
 Old response was `{token, username, role, hospitalName}` plus a separate full-name field; old claims were `role, facilityId, facilityName, specialization, staffId`.
 
-### NEW: GET /auth/me (any role)
-Returns the `user` object above plus `consent`, and `verificationStatus`, `verificationReasonCode`, `verificationReason` for DOCTOR/PHARMACY.
+### NEW: GET /auth/me (any signed-in role)  (built)
+Needs a valid token; without one it is refused (401 or 403). Returns the login `user` fields **flat**, plus `consent`; the three verification fields appear only for DOCTOR and PHARMACY, and any field that is null is left out.
+```json
+// 200 response
+{
+  "id": "665f...", "careId": "CID-7K3MQ9", "name": "Test Patient", "role": "PATIENT",
+  "facilityId": null, "facilityName": null, "profileCompleted": false,
+  "consent": { "accepted": true, "policyVersion": "2026-10-01", "acceptedAt": "2026-10-23T10:00:00Z" }
+}
+```
+For DOCTOR and PHARMACY the object also has `verificationStatus`, `verificationReasonCode` and `verificationReason`. A deleted or unknown user is `401 UNAUTHENTICATED`. Under `/auth`, only `POST /auth/signup` and `POST /auth/login` are public.
 
-### NEW: POST /auth/policy-consent (any role)  (renamed from /auth/consent)
+### NEW: POST /auth/policy-consent (any role), **NOT BUILT**  (renamed from /auth/consent)
 Records withdrawal or re-acceptance of the privacy policy. Not the same thing as an AccessGrant (section 3), which controls who may see which patient's data.
 ```json
 // request
@@ -189,7 +200,9 @@ Withdrawal blocks new prescriptions for that CareID.
 ### NEW: GET /careid/{careId} (DOCTOR, PHARMACY; active grant required)
 Gated (section 3, scope `PROFILE`); 403 `NO_ACTIVE_GRANT` otherwise. Returns `{ "careId", "name", "ageYears", "gender", "consent": { "accepted": true } }`. 404 if unknown (only after the grant check, so an unknown CareID and an ungranted one are indistinguishable: both return 403 `NO_ACTIVE_GRANT`). Never returns phone or full record. `ageYears` and `gender` are left out of the response until the patient profile is stored. To get access to a CareID, start with `POST /access-grants`.
 
-### NEW: Staff account review (SUPER_ADMIN)
+### NEW: Staff account review (SUPER_ADMIN), **NOT BUILT**
+None of these three routes is mapped. Until they are, a PENDING account cannot be approved through the API.
+
 | Method + path | Request | Response |
 |---|---|---|
 | `GET /admin/users?verificationStatus=PENDING` | none | paged `[{id,careId,role,name,facilityId,licenceNumber,stateCouncil,drugLicenceNumber,gstin,state,verificationStatus,verificationReasonCode,verificationReason,createdAt}]` |
@@ -260,7 +273,7 @@ Behaviour of the log and the guard:
 - Grants expire lazily: an ACTIVE grant past `expiresAt` always reads as `EXPIRED`, and the stored status and a `GRANT_EXPIRED` entry (actor role `SYSTEM`) are written the first time it is seen.
 - `from` / `to` are ISO-8601 instants (`from` inclusive, `to` exclusive); a bad value is `400 VALIDATION_ERROR`. `actorRole` is case-insensitive.
 
-**Endpoints covered by the grant rule**
+**Endpoints covered by the grant rule** (the grant rule applies to the endpoints that are built; rows marked NOT BUILT in their own sections are listed here for when they return)
 
 | Endpoint (details in later sections) | Scope needed |
 |---|---|
@@ -290,10 +303,10 @@ A patient can let a person with no Curo account (a relative, a visiting pharmaci
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `POST /patient/me/shares` | PATIENT | `{ "scope": ["medicines","allergies"], "durationHours": 24 }`. `durationHours` optional, default 24, max 168 | `201` share + `token`, `code`, `codeExpiresAt` (below). 400 `INVALID_SCOPE` if `scope` is missing, empty, or has a value outside the three; 400 `DURATION_TOO_LONG` if over 168; 400 `VALIDATION_ERROR` if `durationHours` is not a positive integer; 403 `CONSENT_WITHDRAWN` if the patient withdrew policy consent |
-| NEW | `GET /patient/me/shares?status=&page=&size=` | PATIENT | none | paged list of the patient's shares, newest first (paged shape, section 1). `status` is `ACTIVE`, `EXPIRED` or `REVOKED` |
-| NEW | `POST /patient/me/shares/{shareId}/revoke` | PATIENT (owner) | none | the share with `status:"REVOKED"` and `revokedAt`. Takes effect immediately, on the token and the code. Idempotent: revoking a revoked share returns 200 with the original `revokedAt`. 404 `SHARE_NOT_FOUND` for an unknown id or someone else's share |
-| NEW | `POST /share/redeem` | **public, no JWT** (rate-limited) | exactly one of `{ "token": "..." }` or `{ "code": "..." }` | `200` guest view (below). Errors below. 400 `VALIDATION_ERROR` if both or neither is sent |
+| NEW, **NOT BUILT** | `POST /patient/me/shares` | PATIENT | `{ "scope": ["medicines","allergies"], "durationHours": 24 }`. `durationHours` optional, default 24, max 168 | `201` share + `token`, `code`, `codeExpiresAt` (below). 400 `INVALID_SCOPE` if `scope` is missing, empty, or has a value outside the three; 400 `DURATION_TOO_LONG` if over 168; 400 `VALIDATION_ERROR` if `durationHours` is not a positive integer; 403 `CONSENT_WITHDRAWN` if the patient withdrew policy consent |
+| NEW, **NOT BUILT** | `GET /patient/me/shares?status=&page=&size=` | PATIENT | none | paged list of the patient's shares, newest first (paged shape, section 1). `status` is `ACTIVE`, `EXPIRED` or `REVOKED` |
+| NEW, **NOT BUILT** | `POST /patient/me/shares/{shareId}/revoke` | PATIENT (owner) | none | the share with `status:"REVOKED"` and `revokedAt`. Takes effect immediately, on the token and the code. Idempotent: revoking a revoked share returns 200 with the original `revokedAt`. 404 `SHARE_NOT_FOUND` for an unknown id or someone else's share |
+| NEW, **NOT BUILT** | `POST /share/redeem` | **public, no JWT** (rate-limited) | exactly one of `{ "token": "..." }` or `{ "code": "..." }` | `200` guest view (below). Errors below. 400 `VALIDATION_ERROR` if both or neither is sent |
 
 **Share object** (create, list, revoke)
 ```json
@@ -386,14 +399,14 @@ Every successful redeem writes one entry to the patient's access log, which the 
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE | `POST /hospital/register` | public (rate-limited) | `{name,type,registrationNumber,gstin}` | Hospital `{id,name,type,registrationNumber,gstin,verificationStatus:"PENDING",verifiedAt,verifiedBy}` |
-| KEEP | `GET /hospital/list` | **public** (needed by the doctor signup dropdown) | none | `Hospital[]` |
-| CHANGE | `POST /hospital/{id}/verify` | SUPER_ADMIN | none | Hospital with `VERIFIED` |
-| CHANGE | `POST /hospital/{id}/reject` | SUPER_ADMIN | none | Hospital with `REJECTED` |
-| CHANGE | `POST /pharmacy-facility/register` | public (rate-limited) | `{name,type,drugLicenceNumber,gstin,state,address?}` (old key `drugLicenseNumber`) | PharmacyFacility (same status fields plus `state,address`) |
-| CHANGE | `GET /pharmacy-facility/list` | any authed | none | `PharmacyFacility[]` |
-| CHANGE | `POST /pharmacy-facility/{id}/verify` | SUPER_ADMIN | none | PharmacyFacility `VERIFIED` |
-| CHANGE | `POST /pharmacy-facility/{id}/reject` | SUPER_ADMIN | none | PharmacyFacility `REJECTED` |
+| CHANGE, **NOT BUILT** | `POST /hospital/register` | public (rate-limited) | `{name,type,registrationNumber,gstin}` | Hospital `{id,name,type,registrationNumber,gstin,verificationStatus:"PENDING",verifiedAt,verifiedBy}` |
+| KEEP, **NOT BUILT** | `GET /hospital/list` | **public** (needed by the doctor signup dropdown) | none | `Hospital[]` |
+| CHANGE, **NOT BUILT** | `POST /hospital/{id}/verify` | SUPER_ADMIN | none | Hospital with `VERIFIED` |
+| CHANGE, **NOT BUILT** | `POST /hospital/{id}/reject` | SUPER_ADMIN | none | Hospital with `REJECTED` |
+| CHANGE, **NOT BUILT** | `POST /pharmacy-facility/register` | public (rate-limited) | `{name,type,drugLicenceNumber,gstin,state,address?}` (old key `drugLicenseNumber`) | PharmacyFacility (same status fields plus `state,address`) |
+| CHANGE, **NOT BUILT** | `GET /pharmacy-facility/list` | any authed | none | `PharmacyFacility[]` |
+| CHANGE, **NOT BUILT** | `POST /pharmacy-facility/{id}/verify` | SUPER_ADMIN | none | PharmacyFacility `VERIFIED` |
+| CHANGE, **NOT BUILT** | `POST /pharmacy-facility/{id}/reject` | SUPER_ADMIN | none | PharmacyFacility `REJECTED` |
 
 Rules kept: name unique (409), registration/licence number required (400), GSTIN must match `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$` (400).
 Change: `?adminUsername=` query param is removed; the verifying admin comes from the JWT (`verifiedBy`). The old code also required the SUPER_ADMIN role for these four routes; that is restored here.
@@ -402,21 +415,21 @@ Change: `?adminUsername=` query param is removed; the verifying admin comes from
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| KEEP | `GET /staff/doctors/{hospitalId}` | DOCTOR, ADMIN | none | `[{id,name,specialization,available:true}]`, or when on leave `[{id,name,specialization,available:false,leaveUntil,reason,substituteId,substituteName}]` |
-| CHANGE | `GET /doctor/profile` | DOCTOR | none | `{name,username,specialization,licenceNumber,stateCouncil,verificationStatus}`. Dropped: `hprId`, `hprVerified`, `hprDetails` (the old `hprDetails` was hardcoded fake data) |
-| KEEP | `POST /doctor/leave/mark` | DOCTOR | `{leaveFrom:"2026-11-01",leaveUntil:"2026-11-03",reason:"...",substituteDoctorId}` | DoctorLeave `{id,doctorId,leaveFrom,leaveUntil,reason,substituteDoctorId,status:"ACTIVE"}`. 400 if substitute is self |
-| KEEP | `GET /doctor/leave/mine` | DOCTOR | none | active DoctorLeave or `null` |
-| KEEP | `POST /doctor/leave/{id}/end` | DOCTOR | none | DoctorLeave. 403 if not own leave, 404 unknown |
-| KEEP | `GET /admin/leave/active` | ADMIN | none | `DoctorLeave[]` |
+| KEEP, **NOT BUILT** | `GET /staff/doctors/{hospitalId}` | DOCTOR, ADMIN | none | `[{id,name,specialization,available:true}]`, or when on leave `[{id,name,specialization,available:false,leaveUntil,reason,substituteId,substituteName}]` |
+| CHANGE, **NOT BUILT** | `GET /doctor/profile` | DOCTOR | none | `{name,username,specialization,licenceNumber,stateCouncil,verificationStatus}`. Dropped: `hprId`, `hprVerified`, `hprDetails` (the old `hprDetails` was hardcoded fake data) |
+| KEEP, **NOT BUILT** | `POST /doctor/leave/mark` | DOCTOR | `{leaveFrom:"2026-11-01",leaveUntil:"2026-11-03",reason:"...",substituteDoctorId}` | DoctorLeave `{id,doctorId,leaveFrom,leaveUntil,reason,substituteDoctorId,status:"ACTIVE"}`. 400 if substitute is self |
+| KEEP, **NOT BUILT** | `GET /doctor/leave/mine` | DOCTOR | none | active DoctorLeave or `null` |
+| KEEP, **NOT BUILT** | `POST /doctor/leave/{id}/end` | DOCTOR | none | DoctorLeave. 403 if not own leave, 404 unknown |
+| KEEP, **NOT BUILT** | `GET /admin/leave/active` | ADMIN | none | `DoctorLeave[]` |
 | DROP | `GET /doctor/leave/profile` | | | duplicate of `/doctor/profile` |
 
 ## 6. Check-in and queue (old "reception")
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE | `POST /reception/checkin` | ADMIN (front desk, replaces RECEPTION) or DOCTOR | `{careId,hospitalId,doctorId,patientName,age,gender}` (old key `abha`) | Visit `{id,careId,hospitalId,doctorId,status:"WAITING",checkedInAt}`. 409 if already waiting. Not a grant-gated endpoint; the doctor still needs a grant to open the patient's data |
-| KEEP | `GET /reception/queue/{hospitalId}?doctorId=` | DOCTOR, ADMIN | none | `Visit[]` (doctorId optional filter) |
-| KEEP | `DELETE /reception/visit/{id}` | DOCTOR, ADMIN | none | 200. 404 unknown |
+| CHANGE, **NOT BUILT** | `POST /reception/checkin` | ADMIN (front desk, replaces RECEPTION) or DOCTOR | `{careId,hospitalId,doctorId,patientName,age,gender}` (old key `abha`) | Visit `{id,careId,hospitalId,doctorId,status:"WAITING",checkedInAt}`. 409 if already waiting. Not a grant-gated endpoint; the doctor still needs a grant to open the patient's data |
+| KEEP, **NOT BUILT** | `GET /reception/queue/{hospitalId}?doctorId=` | DOCTOR, ADMIN | none | `Visit[]` (doctorId optional filter) |
+| KEEP, **NOT BUILT** | `DELETE /reception/visit/{id}` | DOCTOR, ADMIN | none | 200. 404 unknown |
 
 ## 7. Prescriptions
 
@@ -425,18 +438,18 @@ Request/response keep old shapes with `patientAbha` renamed `careId`. All patien
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
 | CHANGE | `POST /prescription/issue` | DOCTOR | `{careId,drugs:[{drug,dose,duration?,durationDays?,frequency?,times?}]}`. `doctorId` and `hospitalId` may be sent but are ignored: the doctor is the signed-in user | `201 {drugs:[Prescription],warnings:[{drug,severity,warning,explanation}]}`. `groupId` and `qrCode` return when the pharmacy side is ported. 400 `DRUGS_REQUIRED` (1 to 20 drugs), `DRUG_REQUIRED`, `DOSE_REQUIRED`, `INVALID_FREQUENCY`, `INVALID_SCHEDULE`, `INVALID_DURATION`; 403 `CONSENT_WITHDRAWN` if the patient withdrew policy consent. **Never blocks on an interaction or allergy:** the old 409 on drug conflict is removed; every finding comes back in `warnings` and the prescription is saved regardless (section 9). Each drug is checked against the patient's current drugs and the drugs earlier in the same request. Request problems (400) are reported before any grant check |
-| KEEP | `GET /prescription/by-qr/{qrCode}` | PHARMACY, ADMIN | none | `{groupId,careId,status,issuedAt,drugs}`. 404 invalid; 409 already dispensed; 409 recalled. See QR exception in section 3 |
-| KEEP | `GET /prescription/group/{groupId}` | DOCTOR, PHARMACY, ADMIN | none | `{groupId,careId,status,issuedAt,drugs}`. 404 |
+| KEEP, **NOT BUILT** | `GET /prescription/by-qr/{qrCode}` | PHARMACY, ADMIN | none | `{groupId,careId,status,issuedAt,drugs}`. 404 invalid; 409 already dispensed; 409 recalled. See QR exception in section 3 |
+| KEEP, **NOT BUILT** | `GET /prescription/group/{groupId}` | DOCTOR, PHARMACY, ADMIN | none | `{groupId,careId,status,issuedAt,drugs}`. 404 |
 | DROP | `POST /prescription/group/{groupId}/dispense` | | | superseded by `dispense-full`; not called by any client |
-| KEEP | `POST /prescription/group/{groupId}/dispense-full` | PHARMACY, ADMIN | none (old body unused) | PrescriptionGroup with `status:"DISPENSED"`. 404; 409 not issuable; 409 no pharmacy routing |
-| KEEP | `POST /prescription/group/{groupId}/recall` | DOCTOR | none | PrescriptionGroup `RECALLED`. 404; 409 not active; 403 after 30 minutes |
-| KEEP | `POST /prescription/group/{groupId}/extend` | DOCTOR | `{extendByDays: 3, note: "..."}` | PrescriptionGroup with `extendedDays`, `extensionNote`. 400 if not positive; 409 wrong status |
-| CHANGE | `GET /prescription/patient/{careId}` | DOCTOR, ADMIN | none | `Prescription[]` |
-| CHANGE | `GET /prescription/recent` | DOCTOR, PHARMACY, ADMIN | none | `[{id,careId,status,issuedAt,extendedDays,drugs}]`, only rows under an active grant |
-| CHANGE | `GET /prescription/for-pharmacy/{pharmacyId}` | DOCTOR, PHARMACY, ADMIN | none | `PrescriptionGroup[]`, only rows under an active grant |
-| CHANGE | `GET /prescription/for-patient/{careId}/active` | DOCTOR, PHARMACY, ADMIN | none | `[{groupId,careId,status,issuedAt,drugs}]` |
-| CHANGE | `GET /prescription/active-conflicts/{careId}` | DOCTOR | none | `[{drug,drugClass,doctorId,issuedAt,dose}]` |
-| CHANGE | `DELETE /prescription/{id}` | DOCTOR, ADMIN | none | 200. 404. **409 `HAS_HISTORY` once the item has been dispensed or modified**; use discontinue instead. (ADMIN gets 403 `NO_ACTIVE_GRANT` in practice, see section 3) |
+| KEEP, **NOT BUILT** | `POST /prescription/group/{groupId}/dispense-full` | PHARMACY, ADMIN | none (old body unused) | PrescriptionGroup with `status:"DISPENSED"`. 404; 409 not issuable; 409 no pharmacy routing |
+| KEEP, **NOT BUILT** | `POST /prescription/group/{groupId}/recall` | DOCTOR | none | PrescriptionGroup `RECALLED`. 404; 409 not active; 403 after 30 minutes |
+| KEEP, **NOT BUILT** | `POST /prescription/group/{groupId}/extend` | DOCTOR | `{extendByDays: 3, note: "..."}` | PrescriptionGroup with `extendedDays`, `extensionNote`. 400 if not positive; 409 wrong status |
+| CHANGE, **NOT BUILT** | `GET /prescription/patient/{careId}` | DOCTOR, ADMIN | none | `Prescription[]` |
+| CHANGE, **NOT BUILT** | `GET /prescription/recent` | DOCTOR, PHARMACY, ADMIN | none | `[{id,careId,status,issuedAt,extendedDays,drugs}]`, only rows under an active grant |
+| CHANGE, **NOT BUILT** | `GET /prescription/for-pharmacy/{pharmacyId}` | DOCTOR, PHARMACY, ADMIN | none | `PrescriptionGroup[]`, only rows under an active grant |
+| CHANGE, **NOT BUILT** | `GET /prescription/for-patient/{careId}/active` | DOCTOR, PHARMACY, ADMIN | none | `[{groupId,careId,status,issuedAt,drugs}]` |
+| CHANGE, **NOT BUILT** | `GET /prescription/active-conflicts/{careId}` | DOCTOR | none | `[{drug,drugClass,doctorId,issuedAt,dose}]` |
+| CHANGE, **NOT BUILT** | `DELETE /prescription/{id}` | DOCTOR, ADMIN | none | 200. 404. **409 `HAS_HISTORY` once the item has been dispensed or modified**; use discontinue instead. (ADMIN gets 403 `NO_ACTIVE_GRANT` in practice, see section 3) |
 | NEW | `PUT /prescription/{id}` | DOCTOR (the issuing doctor) | `{dose?, duration?, durationDays?, frequency?, times?, reason}` (at least one change; `reason` required) | Prescription with the new version appended. 404 `PRESCRIPTION_NOT_FOUND`; 403 `FORBIDDEN` if not the issuing doctor; 409 `INVALID_STATE` if discontinued (or recalled, later); 400 `REASON_REQUIRED`, 400 `NO_CHANGE` if nothing differs; 409 `CONCURRENT_MODIFICATION` if two doctors change it at once. If already dispensed, future doses in the schedule are regenerated from the new version (section 8) and a `PRESCRIPTION_CHANGED` alert goes to the patient |
 | NEW | `POST /prescription/{id}/discontinue` | DOCTOR (the issuing doctor) | `{reason}` | Prescription with `status:"DISCONTINUED"` and a final version appended. 404 `PRESCRIPTION_NOT_FOUND`; 403 `FORBIDDEN` if not the issuing doctor; 400 `REASON_REQUIRED`; 409 `INVALID_STATE` if already discontinued. Pending future doses are cancelled; past dose records stay. `PRESCRIPTION_CHANGED` alert to patient |
 | NEW | `GET /prescription/{id}/history` | DOCTOR, PHARMACY | none | `{prescriptionId,careId,drug,currentVersion,versions:[...]}` (version object below) |
@@ -483,13 +496,15 @@ Self-view uses `/patient/me/...` (no grant). The same data for others uses `/pat
 | NEW | `GET /patient/me/medications` | PATIENT | none | current medication profile (below) |
 | NEW | `GET /patient/{careId}/medications` | DOCTOR, PHARMACY, CAREGIVER | none | same, gated (`MEDICATIONS`) |
 | NEW | `GET /patient/me/doses/today` | PATIENT | none | `[Dose]` due today (Indian local day), earliest first |
-| NEW | `GET /patient/me/dose-schedule?from=&to=` | PATIENT | none | `[Dose]` between the dates (default today to +7 days). **Not built yet**; use `doses/today` |
+| NEW, **NOT BUILT** | `GET /patient/me/dose-schedule?from=&to=` | PATIENT | none | `[Dose]` between the dates (default today to +7 days). **Not built yet**; use `doses/today` |
 | NEW | `GET /patient/{careId}/dose-schedule?from=&to=` | DOCTOR, CAREGIVER | none | same, gated (`MEDICATIONS`) |
 | NEW | `POST /doses/{id}/taken` | PATIENT (own dose). CAREGIVER is not built yet | `{takenAt?}` (default now; must not be in the future, else 400 `INVALID_TIME`; any other field, such as a status, is ignored) | The Dose with `status:"TAKEN"`, `takenAt` and `markedBy`. 404 `DOSE_NOT_FOUND` if unknown **or not yours**; 409 `DOSE_ALREADY_TAKEN` (the first record is kept; two taps at once give exactly one 200). `late:true` if taken more than the grace period (30 min) after it was due, or if it had already been marked `MISSED`; a missed dose can still be marked taken |
 | NEW | `GET /patient/me/dose-log?from=&to=&status=&page=&size=` | PATIENT | none | paged `[Dose]` history, newest first. Without `status` it shows what has happened (`TAKEN` and `MISSED`); `status=UPCOMING` shows what is ahead |
-| NEW | `GET /patient/{careId}/dose-log?...` | DOCTOR, CAREGIVER | none | same, gated (`DOSES`) |
+| NEW, **NOT BUILT** | `GET /patient/{careId}/dose-log?...` | DOCTOR, CAREGIVER | none | same, gated (`DOSES`) |
 
-**Current medication profile**
+**Current medication profile** (`GET /patient/me/medications` and `GET /patient/{careId}/medications`): exactly the fields the code returns today. A field that is null is left out of the JSON.
+- Top level: `careId` (string), `asOf` (instant, when it was built), `medications` (array), `allergies` (array of strings; present for the patient themself, or for a clinician or caregiver whose grant also covers `PROFILE`, otherwise absent).
+- Each item in `medications`: `prescriptionId` (string), `drug` (string), `dose` (string), `frequency` (`ONCE_DAILY`, `TWICE_DAILY`, `THREE_TIMES_DAILY` or `FOUR_TIMES_DAILY`; absent for "as needed"), `times` (array of `HH:mm`, local time), `startDate` (`YYYY-MM-DD`, the issue date in Indian time), `endDate` (`YYYY-MM-DD`, last day inclusive; absent when no duration was given), `status` (`ACTIVE` or `DISPENSED`), `currentVersion` (integer), `prescribedBy` (`{name, hospitalName}`; either may be absent).
 ```json
 {
   "careId": "CID-7K3MQ9",
@@ -532,8 +547,8 @@ Only current medications are listed: not discontinued and not past their last da
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `POST /checks/interaction` | DOCTOR, PHARMACY (grant: `PROFILE` + `MEDICATIONS`) | `{careId, drug, dose?, durationDays?}` | `{severity, warning, explanation}` |
-| CHANGE | `POST /ai/risk-score` | DOCTOR, ADMIN | old: `{drug,careId,allergies,duration}` | **Replaced by `/checks/interaction`.** Old response `{riskLevel,riskScore,blocked,awareCategory,explanation}` is not carried over; `blocked` is removed everywhere. The `awareCategory` / `isAntibiotic` flags move to the prescription detail objects (section 12) |
+| NEW, **NOT BUILT** | `POST /checks/interaction` | DOCTOR, PHARMACY (grant: `PROFILE` + `MEDICATIONS`) | `{careId, drug, dose?, durationDays?}` | `{severity, warning, explanation}` |
+| CHANGE, **NOT BUILT** | `POST /ai/risk-score` | DOCTOR, ADMIN | old: `{drug,careId,allergies,duration}` | **Replaced by `/checks/interaction`.** Old response `{riskLevel,riskScore,blocked,awareCategory,explanation}` is not carried over; `blocked` is removed everywhere. The `awareCategory` / `isAntibiotic` flags move to the prescription detail objects (section 12) |
 
 ```json
 // response
@@ -592,8 +607,8 @@ Adding a caregiver creates a standing `CAREGIVER` AccessGrant with **only the `M
 ### Adherence report
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `GET /patient/me/adherence?from=&to=` | PATIENT | none | report (below) |
-| NEW | `GET /patient/{careId}/adherence?from=&to=` | DOCTOR, CAREGIVER | none | same, gated (`DOSES`) |
+| NEW, **NOT BUILT** | `GET /patient/me/adherence?from=&to=` | PATIENT | none | report (below) |
+| NEW, **NOT BUILT** | `GET /patient/{careId}/adherence?from=&to=` | DOCTOR, CAREGIVER | none | same, gated (`DOSES`) |
 
 ```json
 {
@@ -629,9 +644,9 @@ All outside messages go through one `NotificationSender` interface, so alert log
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| KEEP | `GET /pharmacy/prescription/{id}` | PHARMACY, ADMIN | none | Prescription. 404. Grant-gated |
+| KEEP, **NOT BUILT** | `GET /pharmacy/prescription/{id}` | PHARMACY, ADMIN | none | Prescription. 404. Grant-gated |
 | CHANGE | `POST /pharmacy/dispense` | PHARMACY (own pharmacy only) | `{prescriptionId, pharmacyId?, drug?, quantity}`: `quantity` 1 to 10000 (units handed over, recorded in the log). `pharmacyId` is optional but if sent must be the signed-in pharmacist's own pharmacy, otherwise 403 `FORBIDDEN`. `drug`, if sent, must be the prescription's drug (400 `DRUG_MISMATCH`) | `{id,prescriptionId,pharmacyId,qtyDispensed,dispensedAt,status:"DISPENSED",drugName,careId}`. Marks the prescription `DISPENSED` (it stays a current medication) and writes a dispensing log entry. **No stock is checked or reduced.** **Grant-gated** (`PRESCRIPTIONS`, audited as a `WRITE` of `DISPENSE`): 403 `NO_ACTIVE_GRANT`. 404 `PRESCRIPTION_NOT_FOUND`; **409 `ALREADY_DISPENSED`** (one dispense per prescription; the database allows only one log row per prescription, so two simultaneous requests give exactly one 200); 409 `INVALID_STATE` if discontinued or its course has ended; 403 `NO_PHARMACY` / `PHARMACY_NOT_VERIFIED` for an account with no verified pharmacy |
-| KEEP | `GET /pharmacy/log/{pharmacyId}` | PHARMACY, ADMIN | none | `{dispensedCount,rejectedCount,pendingCount,entries:[{id,qtyDispensed,dispensedAt,status,rejectReason,drug,careId}]}` |
+| KEEP, **NOT BUILT** | `GET /pharmacy/log/{pharmacyId}` | PHARMACY, ADMIN | none | `{dispensedCount,rejectedCount,pendingCount,entries:[{id,qtyDispensed,dispensedAt,status,rejectReason,drug,careId}]}` |
 | KEEP | `GET /drugs/list` | DOCTOR, ADMIN, PHARMACY | none | `[{id,name,drugClass,scheduleType}]` sorted by name. Backed by the Mongo `drug_master` collection (48 generic drugs seeded on startup). `scheduleType` is `RX` or `OTC` and indicative only. Reference data, so no grant is involved |
 
 
@@ -641,13 +656,13 @@ All outside messages go through one `NotificationSender` interface, so alert log
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE | `GET /patient/{careId}/summary` | DOCTOR, PHARMACY (old: public). Grant-gated (`PROFILE`) | none | `{careId,name,allergies,conditions}`. Old fallback `{offline:true}` removed; use 503 |
-| CHANGE | `GET /patient/{careId}/history` | DOCTOR (old: public). Grant-gated (`PRESCRIPTIONS`) | none | `[{drug,dose,duration,issuedAt,status,drugClass,riskFlag}]` |
+| CHANGE, **NOT BUILT** | `GET /patient/{careId}/summary` | DOCTOR, PHARMACY (old: public). Grant-gated (`PROFILE`) | none | `{careId,name,allergies,conditions}`. Old fallback `{offline:true}` removed; use 503 |
+| CHANGE, **NOT BUILT** | `GET /patient/{careId}/history` | DOCTOR (old: public). Grant-gated (`PRESCRIPTIONS`) | none | `[{drug,dose,duration,issuedAt,status,drugClass,riskFlag}]` |
 | KEEP | `GET /patient/me` | PATIENT | none | `{id,careId,name,phone,allergies,profileCompleted,...}` |
 | KEEP | `PUT /patient/me` | PATIENT | `{name,allergies,conditions,dob,bloodGroup}` | updated profile. **As built: only `allergies` can be changed** (trimmed, blanks and repeats dropped, at most 30 entries of 60 characters each); the other fields are not stored yet and are ignored |
-| CHANGE | `DELETE /patient/me` | PATIENT | none | **204, soft delete.** See below |
-| KEEP | `POST /patient/me/push-token` | PATIENT | `{pushToken}` (old: query param) | 204 |
-| KEEP | `GET /patient/me/prescriptions/detailed` | PATIENT | none | `[{id,drugName,dosage,durationDays,status,hospitalName,doctorName,createdAt,dispensedAt,visitId,awareCategory,isAntibiotic,allergyConflict,notRecommended,currentVersion}]` |
+| CHANGE, **NOT BUILT** | `DELETE /patient/me` | PATIENT | none | **204, soft delete.** See below |
+| KEEP, **NOT BUILT** | `POST /patient/me/push-token` | PATIENT | `{pushToken}` (old: query param) | 204 |
+| KEEP, **NOT BUILT** | `GET /patient/me/prescriptions/detailed` | PATIENT | none | **NOT BUILT. Replaced by `GET /patient/me/medications` (section 8); do not call it.** Its old fields `drugName`, `dosage`, `durationDays`, `hospitalName`, `doctorName`, `createdAt`, `dispensedAt`, `visitId`, `awareCategory`, `isAntibiotic`, `allergyConflict` and `notRecommended` are not returned anywhere today; the only one that carries over is `currentVersion` |
 | NEW | `POST /patient/me/share-codes` | PATIENT | see section 3 | see section 3 |
 | NEW | `GET /patient/me/access-log` | PATIENT | see section 3 | see section 3 |
 
@@ -707,7 +722,7 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 15. **Pending requests never expire** and nothing yet notifies the patient of a new request (alerts are not built). Add an expiry and the `GRANT_REQUEST` alert?
 16. **The drug and interaction tables need clinical review.** The 48 drugs, 32 interaction pairs and 4 allergy cross-reactions are a hardcoded starter set (`DrugSeed`, `InteractionTable`, `AllergyTable`). A pharmacist or doctor should check the severities and wording before this is used with real patients.
 17. **A doctor with only a `PRESCRIPTIONS` grant still sees allergy warnings** when issuing, because an allergy conflict is safety-critical. The allergy list itself (`PROFILE` scope) is not shown to them.
-18. **`POST /checks/interaction` is not built yet.** The check runs on issue only; the standalone endpoint, the dose schedule, QR/group dispensing and the `PRESCRIPTION_CHANGED` alert come later. `/ai/risk-score` and the old `/prescription/*` pharmacy endpoints remain in the disabled legacy code under `/legacy/prescription`.
+18. **`POST /checks/interaction` is NOT BUILT.** The check runs on issue only; the standalone endpoint, the dose schedule, QR/group dispensing and the `PRESCRIPTION_CHANGED` alert come later. `/ai/risk-score` and the old `/prescription/*` pharmacy endpoints remain in the disabled legacy code under `/legacy/prescription`.
 19. **Patient profile:** only allergies are stored. Name changes, conditions, date of birth and blood group (and so `ageYears` and `gender` on `/careid`) are still to do.
 20. **Alerts: what is and is not built.** Upcoming-dose reminders, missed-dose alerts and escalation are built. Caregiver marking of doses, the doctor-facing adherence report and alerts for grant requests or prescription changes are not.
 21. **Rolling 30-day horizon for open-ended prescriptions** is never topped up. A prescription with no end date runs out of doses after 30 days unless it is modified. A nightly top-up in the scheduler tick would fix it.
