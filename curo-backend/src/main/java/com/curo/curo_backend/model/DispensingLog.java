@@ -8,11 +8,11 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 
-/** One attempt by a pharmacy to dispense a prescription. Append-only. */
+/** One dispense of one prescription by a pharmacy. Append-only. */
 @Data
 @Document("dispensing_logs")
 @CompoundIndexes({
-        // a prescription is dispensed once: the database itself refuses a second DISPENSED row, even for two simultaneous requests
+        // a prescription is dispensed once: the database itself refuses a second row, even for two simultaneous requests
         @CompoundIndex(name = "prescription_dispensed_unique", def = "{'prescriptionId': 1}", unique = true,
                 partialFilter = "{'status': 'DISPENSED'}"),
         @CompoundIndex(name = "pharmacy_at", def = "{'pharmacyId': 1, 'at': -1}")
@@ -30,12 +30,10 @@ public class DispensingLog {
 
     private String drug;
 
+    // units handed over, as the pharmacist recorded it (no stock is tracked)
     private int quantity;
 
     private DispenseStatus status;
-
-    // why a REJECTED attempt was refused
-    private String rejectReason;
 
     private String dispensedByUserId;
 

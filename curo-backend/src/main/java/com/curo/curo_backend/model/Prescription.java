@@ -56,6 +56,11 @@ public class Prescription {
 
     private Instant discontinuedAt;
 
+    // set when a pharmacy dispenses it
+    private Instant dispensedAt;
+
+    private String dispensedByPharmacyId;
+
     private int currentVersion;
 
     private List<PrescriptionVersion> versions;

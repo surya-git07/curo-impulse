@@ -8,21 +8,19 @@ import com.curo.curo_backend.model.AuditAction;
 import com.curo.curo_backend.model.AuditLog;
 import com.curo.curo_backend.model.AuditOutcome;
 import com.curo.curo_backend.repository.AuditLogRepository;
+import com.curo.curo_backend.repository.AuditQueries;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /** Writes and reads audit_logs: who touched which patient's data, and when. */
 @Service
@@ -67,18 +65,7 @@ public class AuditService {
             throw new ApiException(org.springframework.http.HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
                     "page must be 0 or more and size between 1 and " + MAX_PAGE_SIZE + ".");
         }
-        List<Criteria> parts = new ArrayList<>();
-        parts.add(Criteria.where("patientId").is(patientId));
-        if (from != null) {
-            parts.add(Criteria.where("at").gte(from));
-        }
-        if (to != null) {
-            parts.add(Criteria.where("at").lt(to));
-        }
-        if (actorRole != null && !actorRole.isBlank()) {
-            parts.add(Criteria.where("actorRole").is(actorRole.trim().toUpperCase(Locale.ROOT)));
-        }
-        Query query = new Query(new Criteria().andOperator(parts));
+        Query query = AuditQueries.forPatient(patientId, from, to, actorRole);
         long total = mongoTemplate.count(query, AuditLog.class);
         query.with(PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "at")));
         List<AuditEntryView> items = mongoTemplate.find(query, AuditLog.class).stream().map(AuditService::toView).toList();

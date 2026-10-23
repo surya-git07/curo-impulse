@@ -95,7 +95,6 @@ public class AuthService {
             checkDoctorLicence(request, user);
         } else if (PHARMACY.equals(role)) {
             checkPharmacyLicence(request, user);
-            checkLocation(request);
             // the pharmacy record is created after the user; its id is fixed now so the user can point at it in one write
             user.setFacilityId(new ObjectId().toHexString());
             user.setFacilityName(user.getName());
@@ -118,26 +117,13 @@ public class AuthService {
                 saved.getVerificationStatus(), saved.getVerificationReasonCode(), saved.getVerificationReason(), saved.getFacilityId());
     }
 
-    // lat and lng go together; address is free text. Without coordinates the pharmacy simply is not in the nearby finder yet.
-    private void checkLocation(SignupRequest request) {
-        Double lat = request.getLat();
-        Double lng = request.getLng();
-        if ((lat == null) != (lng == null)
-                || lat != null && (!Double.isFinite(lat) || !Double.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_COORDINATES",
-                    "Send lat and lng together: lat between -90 and 90, lng between -180 and 180.");
-        }
-    }
-
     private void createPharmacy(AppUser owner, SignupRequest request) {
         Pharmacy pharmacy = new Pharmacy();
         pharmacy.setId(owner.getFacilityId());
         pharmacy.setName(owner.getName());
         pharmacy.setAddress(request.getAddress() == null || request.getAddress().isBlank() ? null : request.getAddress().trim());
         pharmacy.setState(owner.getState());
-        pharmacy.setLat(request.getLat());
-        pharmacy.setLng(request.getLng());
-        // only a licence that matched the registry is listed to patients; a PENDING one is listed once approved
+        // only a pharmacy whose licence matched the registry may dispense; a PENDING one is switched on once approved
         pharmacy.setVerified(owner.getVerificationStatus() == VerificationStatus.VERIFIED);
         pharmacy.setOwnerUserId(owner.getId());
         try {

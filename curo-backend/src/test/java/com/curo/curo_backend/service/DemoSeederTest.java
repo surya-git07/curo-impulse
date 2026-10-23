@@ -12,7 +12,6 @@ import com.curo.curo_backend.model.GrantScope;
 import com.curo.curo_backend.model.GrantStatus;
 import com.curo.curo_backend.model.LicenceRegistryEntry;
 import com.curo.curo_backend.model.Pharmacy;
-import com.curo.curo_backend.model.PharmacyStock;
 import com.curo.curo_backend.model.Prescription;
 import com.curo.curo_backend.model.PrescriptionStatus;
 import com.curo.curo_backend.model.Severity;
@@ -20,7 +19,6 @@ import com.curo.curo_backend.model.VerificationStatus;
 import com.curo.curo_backend.repository.AccessGrantRepository;
 import com.curo.curo_backend.repository.DrugMasterRepository;
 import com.curo.curo_backend.repository.PharmacyRepository;
-import com.curo.curo_backend.repository.PharmacyStockRepository;
 import com.curo.curo_backend.repository.PrescriptionRepository;
 import com.curo.curo_backend.repository.UserRepository;
 import com.curo.curo_backend.support.MutableClock;
@@ -60,7 +58,6 @@ class DemoSeederTest {
     private final List<AccessGrant> grants = new ArrayList<>();
     private final List<Prescription> prescriptions = new ArrayList<>();
     private final List<Pharmacy> pharmacies = new ArrayList<>();
-    private final List<PharmacyStock> stock = new ArrayList<>();
     private final PasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private UserRepository userRepo;
     private DemoSeeder seeder;
@@ -111,14 +108,6 @@ class DemoSeederTest {
             return p;
         });
 
-        PharmacyStockRepository stockRepo = mock(PharmacyStockRepository.class);
-        when(stockRepo.existsByPharmacyIdAndNormalizedDrug(anyString(), anyString())).thenAnswer(inv -> stock.stream()
-                .anyMatch(s -> s.getPharmacyId().equals(inv.getArgument(0)) && s.getNormalizedDrug().equals(inv.getArgument(1))));
-        when(stockRepo.save(any(PharmacyStock.class))).thenAnswer(inv -> {
-            stock.add(inv.getArgument(0));
-            return inv.getArgument(0);
-        });
-
         seeder = new DemoSeeder();
         ReflectionTestUtils.setField(seeder, "demoPassword", PASSWORD);
         ReflectionTestUtils.setField(seeder, "timeZone", "Asia/Kolkata");
@@ -126,7 +115,6 @@ class DemoSeederTest {
         ReflectionTestUtils.setField(seeder, "grantRepository", grantRepo);
         ReflectionTestUtils.setField(seeder, "prescriptionRepository", rxRepo);
         ReflectionTestUtils.setField(seeder, "pharmacyRepository", pharmacyRepo);
-        ReflectionTestUtils.setField(seeder, "stockRepository", stockRepo);
         ReflectionTestUtils.setField(seeder, "doseScheduleService", mock(DoseScheduleService.class));
         ReflectionTestUtils.setField(seeder, "passwordEncoder", encoder);
         ReflectionTestUtils.setField(seeder, "clock", clock);
@@ -151,7 +139,6 @@ class DemoSeederTest {
         assertThat(withRole("DOCTOR")).hasSize(2);
         assertThat(withRole("PHARMACY")).hasSize(1);
         assertThat(pharmacies).hasSize(1);
-        assertThat(stock).hasSize(10);
     }
 
     @Test
@@ -203,14 +190,12 @@ class DemoSeederTest {
     }
 
     @Test
-    void thePharmacyIsVerifiedInBengaluruLinkedToItsAccountAndHasTenDrugsInStock() {
+    void thePharmacyIsVerifiedAndLinkedToItsAccount() {
         seeder.seed();
 
         Pharmacy pharmacy = pharmacies.get(0);
         AppUser pharmacist = withRole("PHARMACY").get(0);
         assertThat(pharmacy.isVerified()).isTrue();
-        assertThat(pharmacy.getLat()).isBetween(12.80, 13.20);
-        assertThat(pharmacy.getLng()).isBetween(77.40, 77.80);
         assertThat(pharmacy.getAddress()).contains("Bengaluru");
         assertThat(pharmacy.getOwnerUserId()).isEqualTo(pharmacist.getId());
         assertThat(pharmacist.getFacilityId()).isEqualTo(pharmacy.getId());
@@ -225,20 +210,16 @@ class DemoSeederTest {
         assertThat(com.curo.curo_backend.util.GstinValidator.validate(pharmacist.getGstin(), "KA"))
                 .isEqualTo(com.curo.curo_backend.util.GstinValidator.Result.VALID);
 
-        assertThat(stock).allSatisfy(s -> {
-            assertThat(s.getPharmacyId()).isEqualTo(pharmacy.getId());
-            assertThat(s.getQuantity()).isPositive();
-        });
-        List<String> known = DrugSeed.entries().stream().map(DrugMaster::getName).toList();
-        assertThat(stock.stream().map(PharmacyStock::getDrug).toList()).hasSize(10).doesNotHaveDuplicates().allMatch(known::contains);
     }
 
     @Test
-    void theDemoPharmacyIsNotOneOfTheOtherDemoPharmacies() {
+    void theDemoPharmacyIsMarkedAsADemoOneAndHasNoStockOrCoordinates() {
         seeder.seed();
 
         assertThat(pharmacies.get(0).getSeedKey()).isEqualTo(DemoSeeder.PHARMACY_SEED_KEY);
-        assertThat(PharmacySeed.entries()).noneMatch(e -> e.seedKey().equals(DemoSeeder.PHARMACY_SEED_KEY));
+        // the pharmacy record has no coordinate or stock fields at all any more
+        assertThat(Pharmacy.class.getDeclaredFields()).extracting(java.lang.reflect.Field::getName)
+                .noneMatch(n -> n.equals("lat") || n.equals("lng") || n.toLowerCase().contains("stock"));
     }
 
     // ---- access
@@ -343,7 +324,6 @@ class DemoSeederTest {
         int g = grants.size();
         int rx = prescriptions.size();
         int ph = pharmacies.size();
-        int st = stock.size();
         List<String> hashes = users.stream().map(AppUser::getPasswordHash).toList();
 
         seeder.seed();
@@ -353,7 +333,6 @@ class DemoSeederTest {
         assertThat(grants).hasSize(g);
         assertThat(prescriptions).hasSize(rx);
         assertThat(pharmacies).hasSize(ph);
-        assertThat(stock).hasSize(st);
         assertThat(users.stream().map(AppUser::getPasswordHash).toList()).as("passwords are not re-hashed or changed").isEqualTo(hashes);
     }
 
@@ -367,12 +346,10 @@ class DemoSeederTest {
     @Test
     void editedDataIsNeverOverwritten() {
         seeder.seed();
-        stock.get(0).setQuantity(1);
         byCareId(DemoSeeder.P3).setName("Renamed By Hand");
 
         seeder.seed();
 
-        assertThat(stock.get(0).getQuantity()).isEqualTo(1);
         assertThat(byCareId(DemoSeeder.P3).getName()).isEqualTo("Renamed By Hand");
     }
 
@@ -469,7 +446,6 @@ class DemoSeederTest {
                 .withBean(AccessGrantRepository.class, () -> mock(AccessGrantRepository.class))
                 .withBean(PrescriptionRepository.class, () -> mock(PrescriptionRepository.class))
                 .withBean(PharmacyRepository.class, () -> mock(PharmacyRepository.class))
-                .withBean(PharmacyStockRepository.class, () -> mock(PharmacyStockRepository.class))
                 // registered as a ready-made singleton so Spring does not try to autowire the fields inside the mock
                 .withInitializer(ctx -> ctx.getBeanFactory().registerSingleton("doseScheduleService", mock(DoseScheduleService.class)))
                 .withBean(PasswordEncoder.class, () -> encoder)
@@ -495,7 +471,7 @@ class DemoSeederTest {
     @Test
     void itRunsAfterTheSeedersItDependsOn() {
         int demo = DemoSeeder.class.getAnnotation(org.springframework.core.annotation.Order.class).value();
-        for (Class<?> earlier : List.of(DrugSeeder.class, LicenceRegistrySeeder.class, PharmacySeeder.class)) {
+        for (Class<?> earlier : List.of(DrugSeeder.class, LicenceRegistrySeeder.class)) {
             assertThat(earlier.getAnnotation(org.springframework.core.annotation.Order.class).value()).isLessThan(demo);
         }
     }

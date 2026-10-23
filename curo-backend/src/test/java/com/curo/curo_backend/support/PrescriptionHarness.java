@@ -180,13 +180,13 @@ public class PrescriptionHarness {
             doseLogs.removeAll(gone);
             return (long) gone.size();
         });
-        when(doseLogRepository.findByPatientIdAndScheduledAtGreaterThanEqualAndScheduledAtLessThanOrderByScheduledAt(anyString(), any(Instant.class), any(Instant.class)))
+        when(doseLogRepository.findForPatientBetween(anyString(), any(Instant.class), any(Instant.class)))
                 .thenAnswer(inv -> doseLogs.stream().filter(d -> d.getPatientId().equals(inv.getArgument(0))
                         && !d.getScheduledAt().isBefore(inv.getArgument(1)) && d.getScheduledAt().isBefore(inv.getArgument(2)))
                         .sorted(java.util.Comparator.comparing(DoseLog::getScheduledAt)).toList());
         when(doseLogRepository.findByStatusAndScheduledAtLessThanEqual(any(DoseStatus.class), any(Instant.class))).thenAnswer(inv ->
                 doseLogs.stream().filter(d -> d.getStatus() == inv.getArgument(0) && !d.getScheduledAt().isAfter(inv.getArgument(1))).toList());
-        when(doseLogRepository.findByStatusAndScheduledAtGreaterThanAndScheduledAtLessThanEqualAndReminderSentAtIsNull(any(DoseStatus.class), any(Instant.class), any(Instant.class)))
+        when(doseLogRepository.findRemindersDue(any(DoseStatus.class), any(Instant.class), any(Instant.class)))
                 .thenAnswer(inv -> doseLogs.stream().filter(d -> d.getStatus() == inv.getArgument(0) && d.getScheduledAt().isAfter(inv.getArgument(1))
                         && !d.getScheduledAt().isAfter(inv.getArgument(2)) && d.getReminderSentAt() == null).toList());
         when(doseLogRepository.findByPrescriptionIdAndScheduledAtLessThanEqual(anyString(), any(Instant.class), any(org.springframework.data.domain.Pageable.class)))

@@ -317,8 +317,6 @@ class AuthServiceLicenceTest {
     private SignupRequest locatedPharmacy() {
         SignupRequest r = validPharmacy();
         r.setAddress("  1 Test Street, Chennai ");
-        r.setLat(13.0827);
-        r.setLng(80.2707);
         return r;
     }
 
@@ -331,8 +329,6 @@ class AuthServiceLicenceTest {
             assertThat(p.getName()).isEqualTo("Sri Velan Medicals");
             assertThat(p.getAddress()).isEqualTo("1 Test Street, Chennai");
             assertThat(p.getState()).isEqualTo("TN");
-            assertThat(p.getLat()).isEqualTo(13.0827);
-            assertThat(p.getLng()).isEqualTo(80.2707);
             assertThat(p.isVerified()).isTrue();
             assertThat(p.getOwnerUserId()).isEqualTo(r.getId());
             assertThat(p.getSeedKey()).isNull();
@@ -350,28 +346,16 @@ class AuthServiceLicenceTest {
     }
 
     @Test
-    void aPharmacyWithoutCoordinatesIsCreatedWithoutALocation() {
-        SignupRequest noCoords = validPharmacy();
-        noCoords.setAddress("1 Test Street, Chennai");
+    void aPharmacyWithoutAnAddressIsStillCreated() {
+        service.signup(validPharmacy());
 
-        service.signup(noCoords);
-
-        assertThat(pharmacies).singleElement().satisfies(p -> {
-            assertThat(p.hasLocation()).isFalse();
-            assertThat(p.getAddress()).isEqualTo("1 Test Street, Chennai");
-        });
+        assertThat(pharmacies).singleElement().satisfies(p -> assertThat(p.getAddress()).isNull());
     }
 
     @Test
-    void coordinatesMustComeTogetherAndBeInRange() {
-        for (Double[] bad : new Double[][]{{13.0, null}, {null, 80.0}, {91.0, 80.0}, {-91.0, 80.0}, {13.0, 181.0}, {13.0, -181.0},
-                {Double.NaN, 80.0}}) {
-            SignupRequest r = validPharmacy();
-            r.setLat(bad[0]);
-            r.setLng(bad[1]);
-            assertRejectedWithoutSaving(r, HttpStatus.BAD_REQUEST, "INVALID_COORDINATES");
-        }
-        assertThat(pharmacies).isEmpty();
+    void signupKnowsNothingOfCoordinatesAnyMore() {
+        assertThat(SignupRequest.class.getDeclaredFields()).extracting(java.lang.reflect.Field::getName).doesNotContain("lat", "lng");
+        assertThat(Pharmacy.class.getDeclaredFields()).extracting(java.lang.reflect.Field::getName).doesNotContain("lat", "lng");
     }
 
     @Test

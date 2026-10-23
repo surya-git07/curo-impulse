@@ -120,7 +120,7 @@ public class PrescriptionService {
         ZoneId zone = ZoneId.of(timeZone);
         LocalDate today = now.atZone(zone).toLocalDate();
 
-        List<String> namesSoFar = new ArrayList<>(prescriptionRepository.findByCareIdAndStatus(careId, PrescriptionStatus.ACTIVE).stream()
+        List<String> namesSoFar = new ArrayList<>(Courses.live(prescriptionRepository, careId).stream()
                 .filter(p -> Courses.isCurrent(p, today, zone)).map(Prescription::getDrug).toList());
 
         List<Prescription> created = new ArrayList<>();
@@ -266,7 +266,7 @@ public class PrescriptionService {
     }
 
     private void requireActive(Prescription p) {
-        if (p.getStatus() != PrescriptionStatus.ACTIVE) {
+        if (!p.getStatus().isLive()) {
             throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "This prescription has already been discontinued.");
         }
     }

@@ -27,7 +27,6 @@ class CorsConfiguredOriginsTest {
         registry.add("spring.data.mongodb.auto-index-creation", () -> "false");
         registry.add("licence.verification.seed-on-startup", () -> "false");
         registry.add("drugs.seed-on-startup", () -> "false");
-        registry.add("pharmacies.seed-on-startup", () -> "false");
         registry.add("cors.allowed-origins", () -> " https://app.example.com , https://admin.example.com ,, ");
     }
 

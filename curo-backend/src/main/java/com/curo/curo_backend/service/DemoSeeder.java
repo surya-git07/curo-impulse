@@ -8,14 +8,12 @@ import com.curo.curo_backend.model.Frequency;
 import com.curo.curo_backend.model.GrantScope;
 import com.curo.curo_backend.model.GrantStatus;
 import com.curo.curo_backend.model.Pharmacy;
-import com.curo.curo_backend.model.PharmacyStock;
 import com.curo.curo_backend.model.Prescription;
 import com.curo.curo_backend.model.PrescriptionStatus;
 import com.curo.curo_backend.model.PrescriptionVersion;
 import com.curo.curo_backend.model.VerificationStatus;
 import com.curo.curo_backend.repository.AccessGrantRepository;
 import com.curo.curo_backend.repository.PharmacyRepository;
-import com.curo.curo_backend.repository.PharmacyStockRepository;
 import com.curo.curo_backend.repository.PrescriptionRepository;
 import com.curo.curo_backend.repository.UserRepository;
 import org.slf4j.Logger;
@@ -41,7 +39,7 @@ import java.util.Locale;
  * Off unless DEMO_SEED=true. Safe to run on every start: anything that already exists is left alone, and an expired
  * demo grant is renewed. Never enable it against real data: the accounts all share a published demo password.
  *
- * It relies on the drug, licence-registry and pharmacy seeders (order 10) having run first, and uses the invented
+ * It relies on the drug and licence-registry seeders (order 10) having run first, and uses the invented
  * registry licences for its doctors and pharmacy.
  */
 @Component
@@ -65,13 +63,6 @@ public class DemoSeeder implements ApplicationRunner {
     static final String PHARMACY_SEED_KEY = "demo-account-pharmacy";
     private static final Duration GRANT_LENGTH = Duration.ofDays(30);
 
-    /** The 10 drugs the demo pharmacy stocks, with units on hand. */
-    static final List<Object[]> STOCK = List.of(
-            new Object[]{"Paracetamol", 200}, new Object[]{"Amoxicillin", 60}, new Object[]{"Warfarin", 25},
-            new Object[]{"Aspirin", 120}, new Object[]{"Ibuprofen", 90}, new Object[]{"Metformin", 150},
-            new Object[]{"Amlodipine", 80}, new Object[]{"Azithromycin", 40}, new Object[]{"Cetirizine", 100},
-            new Object[]{"Omeprazole", 70});
-
     @Value("${demo.password:DemoPass123!}")
     private String demoPassword;
 
@@ -89,9 +80,6 @@ public class DemoSeeder implements ApplicationRunner {
 
     @Autowired
     private PharmacyRepository pharmacyRepository;
-
-    @Autowired
-    private PharmacyStockRepository stockRepository;
 
     @Autowired
     private DoseScheduleService doseScheduleService;
@@ -162,7 +150,6 @@ public class DemoSeeder implements ApplicationRunner {
             pharmacy.setOwnerUserId(pharmacist.getId());
             pharmacyRepository.save(pharmacy);
         }
-        stockDemoPharmacy(pharmacy, now);
 
         // d1 may see and prescribe for both patients; d2 has no grant, so the consent gate can be shown refusing
         List<GrantScope> clinical = List.of(GrantScope.PROFILE, GrantScope.PRESCRIPTIONS, GrantScope.MEDICATIONS, GrantScope.DOSES);
@@ -183,7 +170,7 @@ public class DemoSeeder implements ApplicationRunner {
                 login("CAREGIVER", CAREGIVER, "linked to Demo Patient One"),
                 login("DOCTOR", DOCTOR_1, "verified; access to patients one and two"),
                 login("DOCTOR", DOCTOR_2, "verified; no patient access"),
-                login("PHARMACY", PHARMACIST, "verified; Nandi Hills Pharma, Hebbal, Bengaluru; stocks 10 drugs"));
+                login("PHARMACY", PHARMACIST, "verified; Nandi Hills Pharma; can dispense"));
     }
 
     // ---- accounts
@@ -232,27 +219,9 @@ public class DemoSeeder implements ApplicationRunner {
             p.setName("Nandi Hills Pharma");
             p.setAddress("Hebbal, Bengaluru 560024");
             p.setState("KA");
-            p.setLat(13.0358);   // Hebbal neighbourhood centre, not a real shop
-            p.setLng(77.5970);
             p.setVerified(true);
             return pharmacyRepository.save(p);
         });
-    }
-
-    private void stockDemoPharmacy(Pharmacy pharmacy, Instant now) {
-        for (Object[] row : STOCK) {
-            String drug = (String) row[0];
-            String normalized = DrugCatalog.normalize(drug);
-            if (!stockRepository.existsByPharmacyIdAndNormalizedDrug(pharmacy.getId(), normalized)) {
-                PharmacyStock s = new PharmacyStock();
-                s.setPharmacyId(pharmacy.getId());
-                s.setDrug(drug);
-                s.setNormalizedDrug(normalized);
-                s.setQuantity((Integer) row[1]);
-                s.setUpdatedAt(now);
-                stockRepository.save(s);
-            }
-        }
     }
 
     // ---- grants and prescriptions
@@ -280,7 +249,7 @@ public class DemoSeeder implements ApplicationRunner {
     }
 
     private void warfarinFor(AppUser patient, AppUser doctor, Instant now) {
-        boolean has = prescriptionRepository.findByCareIdAndStatus(patient.getCareId(), PrescriptionStatus.ACTIVE).stream()
+        boolean has = Courses.live(prescriptionRepository, patient.getCareId()).stream()
                 .anyMatch(p -> "Warfarin".equalsIgnoreCase(p.getDrug()));
         if (has) {
             return;

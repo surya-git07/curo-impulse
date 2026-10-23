@@ -2,10 +2,14 @@ package com.curo.curo_backend.dto;
 
 import lombok.Data;
 
-/** pharmacyId may be sent but is ignored: the pharmacy is the signed-in pharmacist's own. drug, if sent, must match the prescription. */
+/**
+ * pharmacyId is optional, but if sent it must be the signed-in pharmacist's own pharmacy (a pharmacist can only dispense as
+ * their own). drug, if sent, must match the prescription.
+ */
 @Data
 public class DispenseOrderRequest {
     private String prescriptionId;
+    private String pharmacyId;
     private String drug;
     private Integer quantity;
 }

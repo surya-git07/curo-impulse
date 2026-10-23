@@ -5,11 +5,13 @@ Any change to this file ships in the same commit as the code change and is annou
 
 Derived by reading the old apps in `_reference/` (hospital-backend, hospital-site, patient-app). All sample data below is fake.
 
-**Changes in v0.2:** AccessGrants and access log (section 3); prescription versions, modify, discontinue and history (section 7); medication profile, dose schedule and dose log (section 8); interaction and allergy check, non-blocking (section 9); alerts, caregiver links, adherence and the scheduler endpoint (section 10); nearby pharmacies with coordinates (section 11); licence fields in signup (section 2); `/auth/consent` renamed `/auth/policy-consent`; one consent field name (`consent`); soft delete on `DELETE /patient/me`; `GET /hospital/list` stays public; RECEPTION folded into ADMIN, SUPER_ADMIN kept; password reset dropped from the MVP. Sections after 2 were renumbered.
+**Changes in v0.2:** AccessGrants and access log (section 3); prescription versions, modify, discontinue and history (section 7); medication profile, dose schedule and dose log (section 8); interaction and allergy check, non-blocking (section 9); alerts, caregiver links, adherence and the scheduler endpoint (section 10); licence fields in signup (section 2); `/auth/consent` renamed `/auth/policy-consent`; one consent field name (`consent`); soft delete on `DELETE /patient/me`; `GET /hospital/list` stays public; RECEPTION folded into ADMIN, SUPER_ADMIN kept; password reset dropped from the MVP. Sections after 2 were renumbered.
 
 **Changes since v0.3 (access grants built):** share codes are six digits; guard, audit and rate-limit behaviour documented in section 3; `/patient/**` is no longer public.
 
 **Changes since v0.3 (guest share):** new section 3b: `POST /patient/me/shares`, `GET /patient/me/shares`, `POST /patient/me/shares/{shareId}/revoke` and the unauthenticated `POST /share/redeem`. Access log entries gain `granteeType` (`USER` or `GUEST`) and an optional `shareId`; `actor` is `null` for a guest. Not built yet.
+
+**Changes since v0.3 (pharmacy finder and stock removed):** `GET /pharmacies/nearby`, `GET` and `PUT /pharmacy/stock/{id}`, coordinates (`lat`/`lng`) on signup and the stock and distance machinery are gone. `POST /pharmacy/dispense` stays: it marks the prescription `DISPENSED` and writes a dispensing log, with no stock check or reduction.
 
 **Changes in v0.3:** `name` is the only name field for every role (`fullName` removed). Licence signup rewritten (section 2): doctors send `licenceNumber`, `stateCouncil`, `name`; pharmacies send `drugLicenceNumber`, `gstin`, `state`, `name`. The response carries `verificationStatus` (`VERIFIED` or `PENDING`) with `verificationReasonCode` and `verificationReason`, replacing `status` / `statusReason`. `VERIFIED` only on a match against a mock `licence_registry`; otherwise `PENDING` for SUPER_ADMIN approval. Wrong number format, wrong name, wrong state and wrong GSTIN return distinct 400 codes; a duplicate licence returns 409. GSTIN validation rules added. The sample GSTIN in the pharmacy example was replaced because the old one failed the check character.
 
@@ -88,8 +90,6 @@ Creates an account with recorded consent and issues a CareID. Consent is mandato
   "gstin": "33AAGFS4821K1Z5",
   "state": "TN",
   "address": "1 Test Street, Chennai",
-  "lat": 13.0827,
-  "lng": 80.2707,
   "consent": { "accepted": true, "policyVersion": "2026-10-01" }
 }
 // 201 response, number well-formed but not in the registry
@@ -105,7 +105,7 @@ Creates an account with recorded consent and issues a CareID. Consent is mandato
   "consent": { "accepted": true, "policyVersion": "2026-10-01", "acceptedAt": "2026-10-23T10:25:00Z" }
 }
 ```
-`lat`/`lng` are optional; if omitted the server geocodes `address` with AWS Location Service. If both fail the facility is saved without a location and does not appear in `/pharmacies/nearby` until fixed.
+`address` is optional free text. Signup creates the pharmacy record that the account dispenses as. (Coordinates, geocoding and the nearby finder were removed.)
 
 **`name` is the only name field** for every role (the earlier `fullName` is gone). For PATIENT/CAREGIVER/DOCTOR it is the person's name; for PHARMACY it is the licensee name above.
 
@@ -273,7 +273,7 @@ Behaviour of the log and the guard:
 | `POST /checks/interaction` | `PROFILE` + `MEDICATIONS` |
 | `GET /prescription/recent`, `GET /prescription/for-pharmacy/{pharmacyId}` (lists) | list returns only rows covered by one of the caller's active grants; other rows are omitted, not errored |
 
-Not covered (not patient data): `/reception/checkin`, `/reception/queue/...` (hold only the CareID and the name typed at the desk), `/pharmacy/log/{pharmacyId}` (the pharmacy's own dispensing record), doctors, leave, drugs, stock, facilities, `/pharmacies/nearby`.
+Not covered (not patient data): `/reception/checkin`, `/reception/queue/...` (hold only the CareID and the name typed at the desk), `/pharmacy/log/{pharmacyId}` (the pharmacy's own dispensing record), doctors, leave, drugs, stock, facilities.
 
 **Pharmacy QR exception:** `GET /prescription/by-qr/{qrCode}` needs no prior grant. A valid QR is the patient's act of handing the prescription over, so the call creates an `ACTIVE` PHARMACY grant scoped to that one prescription group (short expiry, proposed 24 h), logged as `QR_SCAN`. Needs confirmation (Open Questions).
 
@@ -390,7 +390,7 @@ Every successful redeem writes one entry to the patient's access log, which the 
 | KEEP | `GET /hospital/list` | **public** (needed by the doctor signup dropdown) | none | `Hospital[]` |
 | CHANGE | `POST /hospital/{id}/verify` | SUPER_ADMIN | none | Hospital with `VERIFIED` |
 | CHANGE | `POST /hospital/{id}/reject` | SUPER_ADMIN | none | Hospital with `REJECTED` |
-| CHANGE | `POST /pharmacy-facility/register` | public (rate-limited) | `{name,type,drugLicenceNumber,gstin,state,address,lat?,lng?}` (old key `drugLicenseNumber`) | PharmacyFacility (same status fields plus `state,address,location:{lat,lng}`) |
+| CHANGE | `POST /pharmacy-facility/register` | public (rate-limited) | `{name,type,drugLicenceNumber,gstin,state,address?}` (old key `drugLicenseNumber`) | PharmacyFacility (same status fields plus `state,address`) |
 | CHANGE | `GET /pharmacy-facility/list` | any authed | none | `PharmacyFacility[]` |
 | CHANGE | `POST /pharmacy-facility/{id}/verify` | SUPER_ADMIN | none | PharmacyFacility `VERIFIED` |
 | CHANGE | `POST /pharmacy-facility/{id}/reject` | SUPER_ADMIN | none | PharmacyFacility `REJECTED` |
@@ -465,7 +465,7 @@ Request/response keep old shapes with `patientAbha` renamed `careId`. All patien
 - New optional drug fields: `frequency` (`ONCE_DAILY`, `TWICE_DAILY`, `THREE_TIMES_DAILY`, `FOUR_TIMES_DAILY`), `times` (`["HH:mm"]` in the patient's local time, overrides the default times for that frequency), `durationDays` (integer). The old free-text `duration` is still accepted and parsed ("7 days"); if it cannot be parsed and `durationDays` is absent, no dose schedule is generated for that drug.
 
 **As built (Mongo `prescriptions` collection):**
-- `status` is `ACTIVE` or `DISCONTINUED` for now. `RECALLED`, `ISSUED` and `DISPENSED` arrive with the pharmacy side, and so do `prescriptionGroupId`, `groupId` and `qrCode`.
+- `status` is `ACTIVE`, `DISPENSED` (set by a pharmacy dispense; still a current medication, and the doctor can still modify or discontinue it) or `DISCONTINUED`. `RECALLED` and `ISSUED` are not used, and `prescriptionGroupId`, `groupId` and `qrCode`.
 - Every prescription stores `versions[]`; the top-level fields always equal the latest version. A version records the change type, the values, `reason`, who (`changedBy` user id, name and role) and when (`changedAt`, set by the server).
 - Frequency defaults when `times` is not sent: `ONCE_DAILY` 08:00; `TWICE_DAILY` 08:00 and 20:00; `THREE_TIMES_DAILY` 08:00, 14:00, 20:00; `FOUR_TIMES_DAILY` 06:00, 12:00, 18:00, 22:00. `times` needs a `frequency` and exactly as many different `HH:mm` values as the frequency has doses.
 - `duration` text is read as `N day(s)`, `N week(s)` or `Nd`/`Nw` (1 to 365 days). Anything else is kept as written and gives no end date. An explicit `durationDays` always wins.
@@ -629,17 +629,13 @@ All outside messages go through one `NotificationSender` interface, so alert log
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE | `GET /pharmacy/stock/{pharmacyId}` | PHARMACY (own pharmacy only; another id is 403 `FORBIDDEN`) | none | `[{id,pharmacyId,drug,quantity,updatedAt}]` sorted by drug. Backed by the Mongo `pharmacy_stock` collection, one row per pharmacy and drug |
-| NEW | `PUT /pharmacy/stock/{pharmacyId}` | PHARMACY (own pharmacy only) | `{drug, quantity}`: sets the quantity on hand (0 to 100000), creating the drug if new. An alias is stored under the canonical name (`acetaminophen` is `Paracetamol`) | the stock row. 400 `DRUG_REQUIRED`, 400 `INVALID_QUANTITY` |
 | KEEP | `GET /pharmacy/prescription/{id}` | PHARMACY, ADMIN | none | Prescription. 404. Grant-gated |
-| CHANGE | `POST /pharmacy/dispense` | PHARMACY (own pharmacy; `pharmacyId` in the body is ignored) | `{prescriptionId, drug?, quantity}`: `drug`, if sent, must be the prescription's drug (400 `DRUG_MISMATCH`); `quantity` 1 to 10000 | `{id,prescriptionId,pharmacyId,qtyDispensed,dispensedAt,status:"DISPENSED",drugName,careId}`. **Grant-gated** (`PRESCRIPTIONS`, written to the audit log as a `WRITE` of `DISPENSE`): 403 `NO_ACTIVE_GRANT`. 404 `PRESCRIPTION_NOT_FOUND`; 404 `NOT_STOCKED` if the pharmacy never stocked the drug; **409 `INSUFFICIENT_STOCK`** (nothing changes); 409 `ALREADY_DISPENSED` (one dispense per prescription); 409 `INVALID_STATE` if discontinued or its course has ended. The stock check and subtraction are one atomic step, so two simultaneous dispenses cannot both take the last unit. A refused attempt is kept as a `REJECTED` record with its reason. 403 `NO_PHARMACY` / `PHARMACY_NOT_VERIFIED` for an account with no verified pharmacy |
+| CHANGE | `POST /pharmacy/dispense` | PHARMACY (own pharmacy only) | `{prescriptionId, pharmacyId?, drug?, quantity}`: `quantity` 1 to 10000 (units handed over, recorded in the log). `pharmacyId` is optional but if sent must be the signed-in pharmacist's own pharmacy, otherwise 403 `FORBIDDEN`. `drug`, if sent, must be the prescription's drug (400 `DRUG_MISMATCH`) | `{id,prescriptionId,pharmacyId,qtyDispensed,dispensedAt,status:"DISPENSED",drugName,careId}`. Marks the prescription `DISPENSED` (it stays a current medication) and writes a dispensing log entry. **No stock is checked or reduced.** **Grant-gated** (`PRESCRIPTIONS`, audited as a `WRITE` of `DISPENSE`): 403 `NO_ACTIVE_GRANT`. 404 `PRESCRIPTION_NOT_FOUND`; **409 `ALREADY_DISPENSED`** (one dispense per prescription; the database allows only one log row per prescription, so two simultaneous requests give exactly one 200); 409 `INVALID_STATE` if discontinued or its course has ended; 403 `NO_PHARMACY` / `PHARMACY_NOT_VERIFIED` for an account with no verified pharmacy |
 | KEEP | `GET /pharmacy/log/{pharmacyId}` | PHARMACY, ADMIN | none | `{dispensedCount,rejectedCount,pendingCount,entries:[{id,qtyDispensed,dispensedAt,status,rejectReason,drug,careId}]}` |
 | KEEP | `GET /drugs/list` | DOCTOR, ADMIN, PHARMACY | none | `[{id,name,drugClass,scheduleType}]` sorted by name. Backed by the Mongo `drug_master` collection (48 generic drugs seeded on startup). `scheduleType` is `RX` or `OTC` and indicative only. Reference data, so no grant is involved |
-| NEW | `GET /pharmacies/nearby?lat=&lng=&drug=&radiusKm=&limit=` | any authenticated role | query only. `lat` (-90 to 90) and `lng` (-180 to 180) required; `drug` optional; `radiusKm` default 5, max 50; `limit` default 20, max 50 | `[{id,name,address,state,location:{lat,lng},distanceKm,inStock}]` nearest first. 400 `INVALID_COORDINATES` |
 
-Nearby rules (as built): only pharmacies that are `verified` and have a location are returned, nearest first (equal distances in name order). `drug` is matched against stock by name or alias, ignoring case; when given, only pharmacies holding at least one unit are returned and `inStock` is `true`; when absent, every pharmacy in range is returned and `inStock` is `null`. Quantities are never exposed. `distanceKm` is straight-line (haversine) distance, rounded to 2 decimals, so it is a lower bound on the road distance. It sits behind a `DistanceService` interface so Amazon Location Service can replace it. A pharmacy's coordinates come from signup (`lat`/`lng`); geocoding an address with Location Service is not built yet, so a pharmacy that gave no coordinates is not listed. 400 `INVALID_COORDINATES` for a missing or out-of-range `lat`/`lng`, 400 `VALIDATION_ERROR` for a bad `radiusKm` or `limit`.
 
-**Pharmacy records:** signing up as a PHARMACY now also creates its pharmacy record (name, address, state, coordinates) and returns it as `facilityId`; the account's stock and dispensing act on that pharmacy. It is listed in the finder only once its licence is `VERIFIED`. A PENDING pharmacy is switched on by the SUPER_ADMIN approval step, which is not built yet. Five invented demo pharmacies in Bengaluru (neighbourhood centres, not real shop addresses) with stock are seeded on startup for development; they have no accounts.
+**Pharmacy records:** signing up as a PHARMACY also creates its pharmacy record (name, optional address, state) and returns it as `facilityId`. Dispensing acts as that pharmacy only. The record is switched on (`verified`) only when the licence matched the registry; a PENDING pharmacy cannot dispense until a SUPER_ADMIN approves it (not built yet). There is no stock, no coordinates and no nearby finder: those were removed.
 
 ## 12. Summary and patient app
 
@@ -707,7 +703,7 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 11. **Merge:** old patient-app service endpoints (`/patient/me*`, risk, prescription verify/dispense) are folded into this one backend. Confirm.
 12. **"Wrong number" is read as a malformed licence number** (`INVALID_LICENCE_NUMBER`). A well-formed number that is simply not in the registry becomes `PENDING` rather than an error, otherwise nothing could ever be PENDING. Confirm, or make unlisted numbers a hard error.
 13. **Pharmacy `name` is the licensee name on the drug licence**, since `name` is now the only name field. There is no separate pharmacist name in the MVP. Confirm.
-14. **Deferred in code:** `facilityId`, `address`, `lat` and `lng` on signup are in this contract but are not stored or validated until hospitals and pharmacy facilities are ported off the legacy JPA models.
+14. **Deferred in code:** `facilityId`, `facilityId` and `address` on signup are in this contract but are not stored or validated until hospitals and pharmacy facilities are ported off the legacy JPA models.
 15. **Pending requests never expire** and nothing yet notifies the patient of a new request (alerts are not built). Add an expiry and the `GRANT_REQUEST` alert?
 16. **The drug and interaction tables need clinical review.** The 48 drugs, 32 interaction pairs and 4 allergy cross-reactions are a hardcoded starter set (`DrugSeed`, `InteractionTable`, `AllergyTable`). A pharmacist or doctor should check the severities and wording before this is used with real patients.
 17. **A doctor with only a `PRESCRIPTIONS` grant still sees allergy warnings** when issuing, because an allergy conflict is safety-critical. The allergy list itself (`PROFILE` scope) is not shown to them.
@@ -717,11 +713,10 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 21. **Rolling 30-day horizon for open-ended prescriptions** is never topped up. A prescription with no end date runs out of doses after 30 days unless it is modified. A nightly top-up in the scheduler tick would fix it.
 22. **Doses start at the issue date**, not the dispense date, because dispensing is not tracked yet.
 23. **Pharmacy approval does not yet make a PENDING pharmacy visible.** Approving the account (SUPER_ADMIN review, not built) must also set the pharmacy record verified.
-24. **No address geocoding.** A pharmacy that signs up without `lat`/`lng` is never listed. Amazon Location Service should fill the coordinates from the address, and could also replace the straight-line distance with road distance.
-25. **Stock history and `GET /pharmacy/log/{pharmacyId}`** are not built: dispenses and rejections are recorded, but there is no log endpoint, and stock changes are not recorded individually.
-26. **One dispense per prescription.** There is no refill concept yet, so a second fill is refused. Confirm, or add repeats.
-27. **Demo pharmacies cannot be logged into.** To dispense in development, sign up a PHARMACY account (its stock starts empty; set it with `PUT /pharmacy/stock/{id}`).
-28. **Email has no per-person routing yet.** SNS publishes to one topic; delivering to the right person needs an email subscription with a filter on `recipientCareId` for each user, and users have no email address on file. Until then outside notifications reach only whoever subscribed to the topic.
-29. **A doctor is alerted only with a `DOSES` grant.** The prescribing doctor does not get missed-dose alerts without one. Confirm, or give prescribers a default dose-alert consent when a patient approves their first request.
-30. **Caregivers are added by CareID with no confirmation from the caregiver**, and a "not found" answer reveals whether a CareID belongs to a caregiver account. Confirm, or add an accept step and rate limiting.
-31. **Thresholds:** escalation after 3 consecutive misses per prescription and a 10-minute reminder lead are settings (`alerts.*`). Confirm the defaults.
+24. **`GET /pharmacy/log/{pharmacyId}` is not built.** Dispenses are recorded in the dispensing log, but there is no endpoint to read it.
+25. **One dispense per prescription.** There is no refill concept yet, so a second fill is refused. Confirm, or add repeats.
+26. **Dispensing in development** needs a PHARMACY account (sign one up, or use the demo pharmacist) and a patient grant that covers prescriptions.
+27. **Email has no per-person routing yet.** SNS publishes to one topic; delivering to the right person needs an email subscription with a filter on `recipientCareId` for each user, and users have no email address on file. Until then outside notifications reach only whoever subscribed to the topic.
+28. **A doctor is alerted only with a `DOSES` grant.** The prescribing doctor does not get missed-dose alerts without one. Confirm, or give prescribers a default dose-alert consent when a patient approves their first request.
+29. **Caregivers are added by CareID with no confirmation from the caregiver**, and a "not found" answer reveals whether a CareID belongs to a caregiver account. Confirm, or add an accept step and rate limiting.
+30. **Thresholds:** escalation after 3 consecutive misses per prescription and a 10-minute reminder lead are settings (`alerts.*`). Confirm the defaults.

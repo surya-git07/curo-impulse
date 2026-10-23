@@ -10,13 +10,13 @@ import com.curo.curo_backend.model.DoseLog;
 import com.curo.curo_backend.model.DoseStatus;
 import com.curo.curo_backend.model.Prescription;
 import com.curo.curo_backend.repository.DoseLogRepository;
+import com.curo.curo_backend.repository.DoseQueries;
 import com.curo.curo_backend.repository.PrescriptionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -26,7 +26,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -70,7 +69,7 @@ public class DoseService {
         LocalDate day = clock.instant().atZone(zone).toLocalDate();
         Instant from = day.atStartOfDay(zone).toInstant();
         Instant to = day.plusDays(1).atStartOfDay(zone).toInstant();
-        return views(doseLogRepository.findByPatientIdAndScheduledAtGreaterThanEqualAndScheduledAtLessThanOrderByScheduledAt(
+        return views(doseLogRepository.findForPatientBetween(
                 patient.getId(), from, to));
     }
 
@@ -86,7 +85,7 @@ public class DoseService {
         if (!end.isAfter(start) || Duration.between(start, end).compareTo(Duration.ofDays(31)) > 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "from must be before to, and the range at most 31 days.");
         }
-        return views(doseLogRepository.findByPatientIdAndScheduledAtGreaterThanEqualAndScheduledAtLessThanOrderByScheduledAt(
+        return views(doseLogRepository.findForPatientBetween(
                 granted.patient().getId(), start, end));
     }
 
@@ -127,20 +126,10 @@ public class DoseService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
                     "page must be 0 or more and size between 1 and " + AuditService.MAX_PAGE_SIZE + ".");
         }
-        List<Criteria> parts = new ArrayList<>();
-        parts.add(Criteria.where("patientId").is(patient.getId()));
-        if (from != null) {
-            parts.add(Criteria.where("scheduledAt").gte(from));
-        }
-        if (to != null) {
-            parts.add(Criteria.where("scheduledAt").lt(to));
-        }
-        if (status == null || status.isBlank()) {
-            parts.add(Criteria.where("status").in(DoseStatus.TAKEN, DoseStatus.MISSED));
-        } else {
-            parts.add(Criteria.where("status").is(parseStatus(status)));
-        }
-        Query query = new Query(new Criteria().andOperator(parts));
+        List<DoseStatus> statuses = (status == null || status.isBlank())
+                ? List.of(DoseStatus.TAKEN, DoseStatus.MISSED)
+                : List.of(parseStatus(status));
+        Query query = DoseQueries.log(patient.getId(), from, to, statuses);
         long total = mongoTemplate.count(query, DoseLog.class);
         query.with(PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "scheduledAt")));
         List<DoseView> items = views(mongoTemplate.find(query, DoseLog.class));

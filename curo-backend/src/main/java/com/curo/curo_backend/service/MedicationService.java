@@ -60,7 +60,7 @@ public class MedicationService {
         ZoneId zone = ZoneId.of(timeZone);
         LocalDate today = now.atZone(zone).toLocalDate();
 
-        List<MedicationView> medications = prescriptionRepository.findByCareIdAndStatus(careId, PrescriptionStatus.ACTIVE).stream()
+        List<MedicationView> medications = Courses.live(prescriptionRepository, careId).stream()
                 .filter(p -> Courses.isCurrent(p, today, zone))
                 .sorted(Comparator.comparing(Prescription::getIssuedAt).thenComparing(Prescription::getDrug))
                 .map(p -> new MedicationView(p.getId(), p.getDrug(), p.getDose(), p.getFrequency(), p.getSchedule(),

@@ -41,11 +41,7 @@ public class SignupRequest {
     @Size(max = 10)
     private String state;
 
-    // PHARMACY: where it is. lat and lng together, or neither (then it is left out of the nearby finder).
+    // PHARMACY: where it is (free text, optional)
     @Size(max = 200)
     private String address;
-
-    private Double lat;
-
-    private Double lng;
 }

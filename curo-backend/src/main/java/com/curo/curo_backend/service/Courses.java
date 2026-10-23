@@ -24,9 +24,16 @@ final class Courses {
                 : Optional.of(startDate(p, zone).plusDays(p.getDurationDays() - 1L));
     }
 
+    /** The patient current prescriptions: issued or dispensed, not discontinued. Course dates are checked separately by isCurrent. */
+    static java.util.List<Prescription> live(com.curo.curo_backend.repository.PrescriptionRepository repository, String careId) {
+        java.util.List<Prescription> all = new java.util.ArrayList<>(repository.findByCareIdAndStatus(careId, PrescriptionStatus.ACTIVE));
+        all.addAll(repository.findByCareIdAndStatus(careId, PrescriptionStatus.DISPENSED));
+        return all;
+    }
+
     /** Not discontinued, and not past its last day. A prescription with no duration stays current until discontinued. */
     static boolean isCurrent(Prescription p, LocalDate today, ZoneId zone) {
-        if (p.getStatus() != PrescriptionStatus.ACTIVE) {
+        if (p.getStatus() == null || !p.getStatus().isLive()) {
             return false;
         }
         return endDate(p, zone).map(end -> !today.isAfter(end)).orElse(true);

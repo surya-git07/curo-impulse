@@ -5,10 +5,7 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
-/**
- * A pharmacy that can hold stock and appear in the nearby finder. lat and lng are plain degrees (distance is worked
- * out in code, see DistanceService). Only verified pharmacies with a location are ever returned to patients.
- */
+/** A pharmacy, created when a PHARMACY account signs up. A pharmacist can only dispense as their own pharmacy. */
 @Data
 @Document("pharmacies")
 public class Pharmacy {
@@ -23,21 +20,13 @@ public class Pharmacy {
     // ISO 3166-2:IN code, e.g. KA
     private String state;
 
-    private Double lat;
-
-    private Double lng;
-
     // true once licence verification has passed (VERIFIED), false while PENDING
     private boolean verified;
 
-    // the PHARMACY user who runs it; null for the invented demo pharmacies
+    // the PHARMACY user who runs it
     private String ownerUserId;
 
     // identifies an invented demo pharmacy so seeding never duplicates it
     @Indexed(unique = true, sparse = true)
     private String seedKey;
-
-    public boolean hasLocation() {
-        return lat != null && lng != null;
-    }
 }

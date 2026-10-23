@@ -87,7 +87,7 @@ public class DoseAlertService {
     public long sendReminders() {
         Instant now = clock.instant();
         long sent = 0;
-        List<DoseLog> due = doseLogRepository.findByStatusAndScheduledAtGreaterThanAndScheduledAtLessThanEqualAndReminderSentAtIsNull(
+        List<DoseLog> due = doseLogRepository.findRemindersDue(
                 DoseStatus.UPCOMING, now, now.plus(Duration.ofMinutes(reminderLeadMinutes)));
         for (DoseLog dose : due) {
             try {
