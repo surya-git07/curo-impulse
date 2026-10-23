@@ -24,13 +24,13 @@ const TEAL = '#0d7377';
 function groupByVisit(prescriptions) {
   const groups = {};
   prescriptions.forEach((p) => {
-    const key = p.visit_id || p.id;
+    const key = p.visitId || p.id;
     if (!groups[key]) {
-      groups[key] = { doctor_name: p.doctor_name, hospital_name: p.hospital_name, created_at: p.created_at, drugs: [] };
+      groups[key] = { doctorName: p.doctorName, hospitalName: p.hospitalName, createdAt: p.createdAt, drugs: [] };
     }
     groups[key].drugs.push(p);
   });
-  return Object.entries(groups).sort((a, b) => new Date(withZ(b[1].created_at)) - new Date(withZ(a[1].created_at)));
+  return Object.entries(groups).sort((a, b) => new Date(withZ(b[1].createdAt)) - new Date(withZ(a[1].createdAt)));
 }
 
 // Timestamps are naive UTC; append Z so they parse as UTC (fixes the ~5.5h IST shift).
@@ -49,8 +49,8 @@ function formatVisitDate(iso) {
 function getCourseTag(p) {
   const dispensed = p.status?.toLowerCase().includes('dispensed');
   if (!dispensed) return { label: 'Issued', style: 'tagIssued' };
-  const start = p.dispensed_at || p.created_at;
-  const days = parseInt(p.duration_days, 10) || 0;
+  const start = p.dispensedAt || p.createdAt;
+  const days = parseInt(p.durationDays, 10) || 0;
   if (start && days > 0) {
     const end = new Date(withZ(start));
     end.setDate(end.getDate() + days);
@@ -59,9 +59,11 @@ function getCourseTag(p) {
   return { label: 'Active', style: 'tagActive' };
 }
 
+const ID_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 function makeCareId() {
-  const n = () => Math.floor(1000 + Math.random() * 9000);
-  return `CARE-${n()}-${n()}`;
+  let id = '';
+  for (let i = 0; i < 6; i++) id += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
+  return `CID-${id}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +121,7 @@ function AppInner() {
     setPrescriptions(MOCK_PRESCRIPTIONS);
     setSchedule(MOCK_TODAY_SCHEDULE);
     setPassword('');
-    setScreen(MOCK_PATIENT.profile_completed ? 'app' : 'profile');
+    setScreen(MOCK_PATIENT.profileCompleted ? 'app' : 'profile');
     setTab('home');
   };
 
@@ -158,7 +160,7 @@ function AppInner() {
   if (screen === 'profile') {
     return (
       <ProfileCompletion
-        existingProfile={patient?.profile_completed ? patient : null}
+        existingProfile={patient?.profileCompleted ? patient : null}
         onDone={(data) => { setPatient({ ...patient, ...data }); setScreen('app'); setTab('home'); }}
         onCancel={patient ? () => { setScreen('app'); setTab('settings'); } : null}
       />
@@ -274,11 +276,11 @@ function AppInner() {
   // ---- MAIN APP ----
   const q = search.toLowerCase();
   const filtered = prescriptions.filter((p) => {
-    const match = p.drug_name?.toLowerCase().includes(q) || p.doctor_name?.toLowerCase().includes(q) || p.hospital_name?.toLowerCase().includes(q);
-    return match && (!antibioticOnly || p.is_antibiotic);
+    const match = p.drugName?.toLowerCase().includes(q) || p.doctorName?.toLowerCase().includes(q) || p.hospitalName?.toLowerCase().includes(q);
+    return match && (!antibioticOnly || p.isAntibiotic);
   });
   const active = prescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
-  const conflicts = active.filter((p) => p.allergy_conflict);
+  const conflicts = active.filter((p) => p.allergyConflict);
   const activeVisits = groupByVisit(active);
   const historyVisits = groupByVisit(filtered);
   const takenCount = schedule.filter((d) => d.taken).length;
@@ -299,8 +301,8 @@ function AppInner() {
           <>
             <View style={styles.card}>
               <Text style={styles.cardLabel}>CareID</Text>
-              <TouchableOpacity onPress={() => copy(patient.care_id, 'CareID')} activeOpacity={0.6}>
-                <Text style={styles.careIdInline}>{patient.care_id}  📋</Text>
+              <TouchableOpacity onPress={() => copy(patient.careId, 'CareID')} activeOpacity={0.6}>
+                <Text style={styles.careIdInline}>{patient.careId}  📋</Text>
               </TouchableOpacity>
               <View style={styles.divider} />
               <Text style={styles.cardLabel}>Name</Text>
@@ -310,16 +312,16 @@ function AppInner() {
               <Text style={styles.cardValue}>{patient.phone}</Text>
             </View>
 
-            {patient.allergies && patient.allergies.toLowerCase() !== 'none' ? (
+            {patient.allergies && patient.allergies.length > 0 ? (
               <View style={styles.allergyBanner}>
-                <Text style={styles.allergyText}>⚠️ Allergy on record: {patient.allergies}. Doctors are alerted before prescribing.</Text>
+                <Text style={styles.allergyText}>⚠️ Allergy on record: {patient.allergies.join(', ')}. Doctors are alerted before prescribing.</Text>
               </View>
             ) : null}
 
             {/* Drug-drug interaction warnings */}
             {MOCK_INTERACTIONS.map((ix) => (
               <View key={ix.id} style={[styles.interactionCard, { borderLeftColor: SEVERITY_COLORS[ix.severity] }]}>
-                <Text style={styles.interactionTitle}>🚨 {ix.drug_a} + {ix.drug_b} — {ix.warning}</Text>
+                <Text style={styles.interactionTitle}>🚨 {ix.drugA} + {ix.drugB} — {ix.warning}</Text>
                 <Text style={styles.interactionText}>{ix.explanation}</Text>
                 <Text style={[styles.severityLabel, { color: SEVERITY_COLORS[ix.severity] }]}>{ix.severity.toUpperCase()} INTERACTION</Text>
               </View>
@@ -329,7 +331,7 @@ function AppInner() {
               <View style={styles.conflictBanner}>
                 <Text style={styles.conflictTitle}>🚨 Allergy Conflict</Text>
                 <Text style={styles.conflictText}>
-                  {conflicts.length === 1 ? `${conflicts[0].drug_name} conflicts with your recorded allergies.` : `${conflicts.length} active medicines conflict with your allergies.`} Contact your doctor before taking.
+                  {conflicts.length === 1 ? `${conflicts[0].drugName} conflicts with your recorded allergies.` : `${conflicts.length} active medicines conflict with your allergies.`} Contact your doctor before taking.
                 </Text>
               </View>
             ) : null}
@@ -360,7 +362,7 @@ function AppInner() {
               <View key={d.id} style={[styles.card, d.taken && styles.cardDone]}>
                 <View style={styles.doseRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.drugName, d.taken && styles.doneText]}>{d.drug_name}</Text>
+                    <Text style={[styles.drugName, d.taken && styles.doneText]}>{d.drugName}</Text>
                     <Text style={styles.cardValue}>{d.dosage} · {d.time}</Text>
                   </View>
                   <TouchableOpacity style={[styles.markBtn, d.taken && styles.markBtnDone]} onPress={() => toggleTaken(d.id)}>
@@ -376,7 +378,7 @@ function AppInner() {
             We surface History under its own in-app view via the search field here on Home-less tabs. */}
 
         {/* QR */}
-        {tab === 'qr' && <QrTab careId={patient.care_id} onRefresh={() => showToast('QR refreshed')} refreshing={false} />}
+        {tab === 'qr' && <QrTab careId={patient.careId} onRefresh={() => showToast('QR refreshed')} refreshing={false} />}
 
         {/* BOOK */}
         {tab === 'book' && <BookTab />}
@@ -390,7 +392,7 @@ function AppInner() {
             <View style={styles.card}>
               <Text style={styles.cardLabel}>Logged in as</Text>
               <Text style={styles.cardValue}>{patient.name}</Text>
-              <Text style={styles.cardValueFaint}>{patient.phone} · {patient.care_id}</Text>
+              <Text style={styles.cardValueFaint}>{patient.phone} · {patient.careId}</Text>
             </View>
             <SettingsItem text="✏️  Edit Personal Details" onPress={() => setScreen('profile')} />
             <SettingsItem text="🧾  Prescription History" onPress={() => setTab('history')} />
@@ -459,9 +461,9 @@ function VisitCard({ visit, open, onToggle, badgeStyleFor, showFlags }) {
   return (
     <View style={styles.visitCard}>
       <TouchableOpacity onPress={onToggle} activeOpacity={0.75}>
-        <Text style={styles.visitDoctor}>{visit.doctor_name || 'Unknown Doctor'}</Text>
-        <Text style={styles.visitHospital}>{visit.hospital_name || 'Unknown Hospital'}</Text>
-        <Text style={styles.visitDate}>{formatVisitDate(visit.created_at)}</Text>
+        <Text style={styles.visitDoctor}>{visit.doctorName || 'Unknown Doctor'}</Text>
+        <Text style={styles.visitHospital}>{visit.hospitalName || 'Unknown Hospital'}</Text>
+        <Text style={styles.visitDate}>{formatVisitDate(visit.createdAt)}</Text>
       </TouchableOpacity>
       {open && (
         <View style={styles.visitDrugs}>
@@ -470,14 +472,14 @@ function VisitCard({ visit, open, onToggle, badgeStyleFor, showFlags }) {
             return (
               <View key={p.id} style={styles.drugRow}>
                 <View style={styles.rxHeader}>
-                  <Text style={styles.visitDrugName}>{p.drug_name}</Text>
-                  {p.aware_category ? (
-                    <View style={[styles.badge, badgeStyleFor(p.aware_category)]}><Text style={styles.badgeText}>{p.aware_category}</Text></View>
+                  <Text style={styles.visitDrugName}>{p.drugName}</Text>
+                  {p.awareCategory ? (
+                    <View style={[styles.badge, badgeStyleFor(p.awareCategory)]}><Text style={styles.badgeText}>{p.awareCategory}</Text></View>
                   ) : null}
                 </View>
-                <Text style={styles.cardValue}>{p.dosage} · {p.duration_days} days</Text>
+                <Text style={styles.cardValue}>{p.dosage} · {p.durationDays} days</Text>
                 <View style={[styles.courseTag, styles[tag.style]]}><Text style={styles.courseTagText}>{tag.label}</Text></View>
-                {showFlags && p.allergy_conflict ? <Text style={styles.flag}>⚠️ Conflicts with your allergies</Text> : null}
+                {showFlags && p.allergyConflict ? <Text style={styles.flag}>⚠️ Conflicts with your allergies</Text> : null}
               </View>
             );
           })}

@@ -21,7 +21,7 @@ export default function QrTab({ careId, onRefresh, refreshing }) {
 
       <View style={styles.qrBox}>
         {QRCode ? (
-          <QRCode value={careId || 'CARE-UNKNOWN'} size={200} color="#1a3c3d" backgroundColor="#fff" />
+          <QRCode value={careId || 'CID-UNKNOWN'} size={200} color="#1a3c3d" backgroundColor="#fff" />
         ) : (
           <View style={styles.fallback}>
             <Text style={styles.fallbackLabel}>CareID</Text>

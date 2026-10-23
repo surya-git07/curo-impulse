@@ -32,9 +32,9 @@ const scopeText = (scopes) => scopes.map((s) => SCOPE_LABELS[s]).join(', ');
 function errorMessage(r) {
   switch (r.error) {
     case 'INVALID_CODE': return 'No share matches this code. Check it and try again.';
-    case 'SHARE_EXPIRED': return `This share expired on ${formatWhen(r.expires_at)}. Ask the patient for a new code.`;
+    case 'SHARE_EXPIRED': return `This share expired on ${formatWhen(r.expiresAt)}. Ask the patient for a new code.`;
     case 'SHARE_REVOKED': return 'The patient has stopped sharing this record.';
-    case 'TOO_MANY_ATTEMPTS': return `Too many wrong codes. Try again in ${r.retry_after} seconds.`;
+    case 'TOO_MANY_ATTEMPTS': return `Too many wrong codes. Try again in ${r.retryAfter} seconds.`;
     default: return 'Something went wrong.';
   }
 }
@@ -118,7 +118,7 @@ export default function ShareRecord({ onBack, onCopied }) {
             <Text style={styles.linkText}>{created.link}  📋</Text>
           </TouchableOpacity>
           <Text style={styles.cardValueFaint}>Shares: {scopeText(created.scopes)}</Text>
-          <Text style={styles.cardValueFaint}>Expires {formatWhen(created.expires_at)}</Text>
+          <Text style={styles.cardValueFaint}>Expires {formatWhen(created.expiresAt)}</Text>
         </View>
       ) : null}
 
@@ -131,7 +131,7 @@ export default function ShareRecord({ onBack, onCopied }) {
           <View style={{ flex: 1 }}>
             <Text style={styles.drugName}>{s.code}</Text>
             <Text style={styles.cardValue}>{scopeText(s.scopes)}</Text>
-            <Text style={styles.cardValueFaint}>Expires {formatWhen(s.expires_at)}</Text>
+            <Text style={styles.cardValueFaint}>Expires {formatWhen(s.expiresAt)}</Text>
           </View>
           <TouchableOpacity style={styles.revokeBtn} onPress={() => revoke(s.id)}>
             <Text style={styles.revokeText}>Revoke</Text>
@@ -166,26 +166,26 @@ export default function ShareRecord({ onBack, onCopied }) {
 
         {outcome && outcome.ok ? (
           <View style={styles.okBox}>
-            <Text style={styles.okTitle}>Shared by {outcome.shared_by} · valid until {formatWhen(outcome.share.expires_at)}</Text>
+            <Text style={styles.okTitle}>Shared by {outcome.sharedBy} · valid until {formatWhen(outcome.share.expiresAt)}</Text>
             {outcome.data.medicines ? (
               <>
                 <Text style={styles.okHead}>Medicines</Text>
                 {outcome.data.medicines.map((m, i) => (
-                  <Text key={i} style={styles.okLine}>{m.drug_name} · {m.dosage} · {m.duration_days} days</Text>
+                  <Text key={i} style={styles.okLine}>{m.drugName} · {m.dosage} · {m.durationDays} days</Text>
                 ))}
               </>
             ) : null}
             {outcome.data.allergies !== undefined ? (
               <>
                 <Text style={styles.okHead}>Allergies</Text>
-                <Text style={styles.okLine}>{outcome.data.allergies || 'None recorded'}</Text>
+                <Text style={styles.okLine}>{outcome.data.allergies.length > 0 ? outcome.data.allergies.join(', ') : 'None recorded'}</Text>
               </>
             ) : null}
             {outcome.data.history ? (
               <>
                 <Text style={styles.okHead}>History</Text>
                 {outcome.data.history.map((h, i) => (
-                  <Text key={i} style={styles.okLine}>{h.drug_name} · {h.doctor_name} · {formatWhen(h.created_at)}</Text>
+                  <Text key={i} style={styles.okLine}>{h.drugName} · {h.doctorName} · {formatWhen(h.createdAt)}</Text>
                 ))}
               </>
             ) : null}

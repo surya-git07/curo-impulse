@@ -8,6 +8,8 @@ const TEAL = '#0d7377';
 // All local/mock: onDone receives the filled profile.
 export default function ProfileCompletion({ existingProfile, onDone, onCancel }) {
   const [form, setForm] = useState({ ...BLANK_PROFILE, ...(existingProfile || {}) });
+  // Allergies are an array in the data; edit them as comma-separated text.
+  const [allergiesText, setAllergiesText] = useState(((existingProfile && existingProfile.allergies) || []).join(', '));
 
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
@@ -37,7 +39,8 @@ export default function ProfileCompletion({ existingProfile, onDone, onCancel })
 
   const submit = () => {
     if (!form.age || !form.gender) return Alert.alert('Please fill at least age and gender');
-    onDone({ ...form, profile_completed: true });
+    const allergies = allergiesText.split(',').map((a) => a.trim()).filter((a) => a && a.toLowerCase() !== 'none');
+    onDone({ ...form, allergies, profileCompleted: true });
   };
 
   return (
@@ -48,15 +51,18 @@ export default function ProfileCompletion({ existingProfile, onDone, onCancel })
 
         {field('age', 'Age', { keyboardType: 'number-pad' })}
         {picker('gender', 'Gender', ['Female', 'Male', 'Other'])}
-        {picker('blood_group', 'Blood group', ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'])}
-        {field('height_cm', 'Height (cm)', { keyboardType: 'number-pad' })}
-        {field('weight_kg', 'Weight (kg)', { keyboardType: 'number-pad' })}
-        {field('allergies', 'Allergies', { placeholder: 'e.g. Penicillin, or None' })}
+        {picker('bloodGroup', 'Blood group', ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'])}
+        {field('heightCm', 'Height (cm)', { keyboardType: 'number-pad' })}
+        {field('weightKg', 'Weight (kg)', { keyboardType: 'number-pad' })}
+        <View style={styles.field}>
+          <Text style={styles.label}>Allergies</Text>
+          <TextInput style={styles.input} value={allergiesText} onChangeText={setAllergiesText} placeholder="e.g. Penicillin, Sulfa (comma separated, empty if none)" />
+        </View>
         {field('conditions', 'Ongoing conditions', { placeholder: 'e.g. Diabetes' })}
         {picker('pregnancy', 'Pregnancy', ['Not applicable', 'Not pregnant', 'Pregnant'])}
         {field('surgeries', 'Past surgeries', { multiline: true })}
-        {field('current_medications', 'Current medications', { multiline: true })}
-        {field('traditional_medicine', 'Traditional medicine', { multiline: true, placeholder: 'e.g. Ayurveda, none' })}
+        {field('currentMedications', 'Current medications', { multiline: true })}
+        {field('traditionalMedicine', 'Traditional medicine', { multiline: true, placeholder: 'e.g. Ayurveda, none' })}
 
         <TouchableOpacity style={styles.button} onPress={submit}>
           <Text style={styles.buttonText}>Save profile</Text>
