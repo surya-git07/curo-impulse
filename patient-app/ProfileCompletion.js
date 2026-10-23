@@ -5,11 +5,13 @@ import { BLANK_PROFILE } from './mocks/data';
 const TEAL = '#0d7377';
 
 // Medical profile form, shown after first signup and from Settings > Edit.
-// All local/mock: onDone receives the filled profile.
-export default function ProfileCompletion({ existingProfile, onDone, onCancel }) {
+// onDone receives the filled profile (App saves allergies to the backend, the rest stays local).
+// initialAllergies pre-fills the allergies box even before the profile is marked completed;
+// without it a first-time save would send [] and wipe allergies already on the server.
+export default function ProfileCompletion({ existingProfile, initialAllergies, saving, onDone, onCancel }) {
   const [form, setForm] = useState({ ...BLANK_PROFILE, ...(existingProfile || {}) });
   // Allergies are an array in the data; edit them as comma-separated text.
-  const [allergiesText, setAllergiesText] = useState(((existingProfile && existingProfile.allergies) || []).join(', '));
+  const [allergiesText, setAllergiesText] = useState((initialAllergies || (existingProfile && existingProfile.allergies) || []).join(', '));
 
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
@@ -38,6 +40,7 @@ export default function ProfileCompletion({ existingProfile, onDone, onCancel })
   );
 
   const submit = () => {
+    if (saving) return;
     if (!form.age || !form.gender) return Alert.alert('Please fill at least age and gender');
     const allergies = allergiesText.split(',').map((a) => a.trim()).filter((a) => a && a.toLowerCase() !== 'none');
     onDone({ ...form, allergies, profileCompleted: true });
@@ -64,8 +67,8 @@ export default function ProfileCompletion({ existingProfile, onDone, onCancel })
         {field('currentMedications', 'Current medications', { multiline: true })}
         {field('traditionalMedicine', 'Traditional medicine', { multiline: true, placeholder: 'e.g. Ayurveda, none' })}
 
-        <TouchableOpacity style={styles.button} onPress={submit}>
-          <Text style={styles.buttonText}>Save profile</Text>
+        <TouchableOpacity style={styles.button} onPress={submit} disabled={saving}>
+          <Text style={styles.buttonText}>{saving ? 'Saving…' : 'Save profile'}</Text>
         </TouchableOpacity>
         {onCancel && (
           <TouchableOpacity onPress={onCancel}>

@@ -200,3 +200,13 @@ export async function createShareCode(scope = ['PROFILE', 'PRESCRIPTIONS'], dura
     expiresAtDisplay: istTime(res.expiresAt), // for on-screen display
   };
 }
+
+// ---- profile ---------------------------------------------------------------
+// PUT /patient/me. As built, only `allergies` is stored (trimmed, blanks and
+// repeats dropped, at most 30 entries of 60 characters). Returns what the server kept.
+export async function updateAllergies(allergies) {
+  const path = '/patient/me';
+  const res = await request('PUT', path, { body: { allergies } });
+  if (!res || !Array.isArray(res.allergies)) throw shapeError(path, 'profile update');
+  return { allergies: res.allergies.filter(isStr) };
+}

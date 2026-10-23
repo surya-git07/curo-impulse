@@ -9,6 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import ProfileCompletion from './ProfileCompletion';
 import BottomNav from './BottomNav';
 import FamilyTab from './FamilyTab';
+import { saveProfile as persistProfile } from './profileSave';
 import BookTab from './BookTab';
 import QrTab from './QrTab';
 import PrivacyNotice from './PrivacyNotice';
@@ -19,7 +20,7 @@ import { MOCK_MODE } from './config';
 import { findInteractions, findAllergyConflicts } from './ruleChecks';
 import {
   MOCK_PATIENT, MOCK_PRESCRIPTIONS, MOCK_TODAY_SCHEDULE,
-  MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG,
+  MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG, MOCK_FAMILY,
 } from './mocks/data';
 
 const TEAL = '#0d7377';
@@ -96,6 +97,8 @@ function AppInner() {
   const [profileLive, setProfileLive] = useState(false);    // true when the profile (allergies) came from the server
   const [scheduleLive, setScheduleLive] = useState(false);  // true when doses came from the server
   const [loggingIn, setLoggingIn] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [family, setFamily] = useState(MOCK_FAMILY);       // Family tab, local only; kept here so it survives tab switches
 
   const [search, setSearch] = useState('');
   const [antibioticOnly, setAntibioticOnly] = useState(false);
@@ -234,7 +237,7 @@ function AppInner() {
   const logout = () => {
     api.clearSession();
     setPatient(null); setPrescriptions([]); setHomePrescriptions([]); setMedications(null);
-    setSchedule([]); setScheduleLive(false); setProfileLive(false);
+    setSchedule([]); setScheduleLive(false); setProfileLive(false); setFamily(MOCK_FAMILY);
     setTab('home'); setShowActive(false); setVisitExpanded({}); setScreen('login');
   };
 
@@ -265,6 +268,19 @@ function AppInner() {
     }
   };
 
+  // Profile form: allergies go to PUT /patient/me when logged in live; if that fails the edit is
+  // kept locally and a toast says so. Everything else on the form is local.
+  const onProfileSave = async (data) => {
+    if (savingProfile) return;
+    setSavingProfile(true);
+    const result = await persistProfile({ patient, data, live: profileLive && api.hasSession() });
+    setSavingProfile(false);
+    setPatient(result.patient);
+    setScreen('app');
+    setTab('home');
+    if (result.error) showToast('Saved on this device only (server unavailable)');
+  };
+
   const toggleVisit = (key) => setVisitExpanded((v) => ({ ...v, [key]: !v[key] }));
 
   const badgeStyleFor = (cat) => ({
@@ -279,7 +295,9 @@ function AppInner() {
     return (
       <ProfileCompletion
         existingProfile={patient?.profileCompleted ? patient : null}
-        onDone={(data) => { setPatient({ ...patient, ...data }); setScreen('app'); setTab('home'); }}
+        initialAllergies={patient?.allergies}
+        saving={savingProfile}
+        onDone={onProfileSave}
         onCancel={patient ? () => { setScreen('app'); setTab('settings'); } : null}
       />
     );
@@ -481,7 +499,7 @@ function AppInner() {
         {tab === 'book' && <BookTab />}
 
         {/* FAMILY */}
-        {tab === 'family' && <FamilyTab />}
+        {tab === 'family' && <FamilyTab members={family} onChange={setFamily} />}
 
         {/* SETTINGS */}
         {tab === 'settings' && !overlay && (
