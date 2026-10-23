@@ -9,6 +9,8 @@ Derived by reading the old apps in `_reference/` (hospital-backend, hospital-sit
 
 **Changes since v0.3 (access grants built):** share codes are six digits; guard, audit and rate-limit behaviour documented in section 3; `/patient/**` is no longer public.
 
+**Changes since v0.3 (guest share):** new section 3b: `POST /patient/me/shares`, `GET /patient/me/shares`, `POST /patient/me/shares/{shareId}/revoke` and the unauthenticated `POST /share/redeem`. Access log entries gain `granteeType` (`USER` or `GUEST`) and an optional `shareId`; `actor` is `null` for a guest. Not built yet.
+
 **Changes in v0.3:** `name` is the only name field for every role (`fullName` removed). Licence signup rewritten (section 2): doctors send `licenceNumber`, `stateCouncil`, `name`; pharmacies send `drugLicenceNumber`, `gstin`, `state`, `name`. The response carries `verificationStatus` (`VERIFIED` or `PENDING`) with `verificationReasonCode` and `verificationReason`, replacing `status` / `statusReason`. `VERIFIED` only on a match against a mock `licence_registry`; otherwise `PENDING` for SUPER_ADMIN approval. Wrong number format, wrong name, wrong state and wrong GSTIN return distinct 400 codes; a duplicate licence returns 409. GSTIN validation rules added. The sample GSTIN in the pharmacy example was replaced because the old one failed the check character.
 
 ## 1. Conventions
@@ -273,6 +275,111 @@ Behaviour of the log and the guard:
 Not covered (not patient data): `/reception/checkin`, `/reception/queue/...` (hold only the CareID and the name typed at the desk), `/pharmacy/log/{pharmacyId}` (the pharmacy's own dispensing record), doctors, leave, drugs, stock, facilities, `/pharmacies/nearby`.
 
 **Pharmacy QR exception:** `GET /prescription/by-qr/{qrCode}` needs no prior grant. A valid QR is the patient's act of handing the prescription over, so the call creates an `ACTIVE` PHARMACY grant scoped to that one prescription group (short expiry, proposed 24 h), logged as `QR_SCAN`. Needs confirmation (Open Questions).
+
+## 3b. Guest share (read-only view for someone without an account)
+
+A patient can let a person with no Curo account (a relative, a visiting pharmacist) see part of their record, read-only, for a limited time. This is **not** an AccessGrant (section 3): it creates no grant, the guest has no JWT, and the secret opens exactly one endpoint, `POST /share/redeem`. It is also not the clinician share code of section 3 (`/patient/me/share-codes`), which only starts a grant for a signed-in DOCTOR or PHARMACY.
+
+**Scope** is a non-empty subset of `["medicines", "allergies", "history"]` (repeats are ignored). `medicines` is the current medication profile (section 8), `allergies` the allergy list, `history` past prescriptions. A guest never sees phone, name, CareID, doses or the access log.
+
+**Secrets (two ways in, both returned once at creation)**
+- `token`: the main secret. 32 bytes from a cryptographically secure RNG, base64url (43 characters), meant for a link or QR. Valid until `expiresAt`.
+- `code`: a short fallback to read out or type. 8 characters from the CareID alphabet (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`). Expires fast: valid for **15 minutes** from creation (`codeExpiresAt`, configurable), and never later than `expiresAt`.
+- Only hashes of `token` and `code` are stored. Neither can be read back: not from `GET /patient/me/shares`, not from logs, not by Claude or SUPER_ADMIN. A lost secret means revoking and creating a new share.
+
+| Status | Method + path | Auth | Request | Response |
+|---|---|---|---|---|
+| NEW | `POST /patient/me/shares` | PATIENT | `{ "scope": ["medicines","allergies"], "durationHours": 24 }`. `durationHours` optional, default 24, max 168 | `201` share + `token`, `code`, `codeExpiresAt` (below). 400 `INVALID_SCOPE` if `scope` is missing, empty, or has a value outside the three; 400 `DURATION_TOO_LONG` if over 168; 400 `VALIDATION_ERROR` if `durationHours` is not a positive integer; 403 `CONSENT_WITHDRAWN` if the patient withdrew policy consent |
+| NEW | `GET /patient/me/shares?status=&page=&size=` | PATIENT | none | paged list of the patient's shares, newest first (paged shape, section 1). `status` is `ACTIVE`, `EXPIRED` or `REVOKED` |
+| NEW | `POST /patient/me/shares/{shareId}/revoke` | PATIENT (owner) | none | the share with `status:"REVOKED"` and `revokedAt`. Takes effect immediately, on the token and the code. Idempotent: revoking a revoked share returns 200 with the original `revokedAt`. 404 `SHARE_NOT_FOUND` for an unknown id or someone else's share |
+| NEW | `POST /share/redeem` | **public, no JWT** (rate-limited) | exactly one of `{ "token": "..." }` or `{ "code": "..." }` | `200` guest view (below). Errors below. 400 `VALIDATION_ERROR` if both or neither is sent |
+
+**Share object** (create, list, revoke)
+```json
+{
+  "shareId": "665f0000000000000000h001",
+  "careId": "CID-7K3MQ9",
+  "scope": ["medicines", "allergies"],
+  "status": "ACTIVE",
+  "durationHours": 24,
+  "createdAt": "2026-10-23T10:30:00Z",
+  "expiresAt": "2026-10-24T10:30:00Z",
+  "revokedAt": null,
+  "viewCount": 2,
+  "lastViewedAt": "2026-10-23T11:05:00Z"
+}
+```
+`status` is `ACTIVE`, `EXPIRED` (read as such as soon as `expiresAt` passes) or `REVOKED`. `viewCount` is the number of successful redeems; `lastViewedAt` is `null` until the first. The create response adds:
+```json
+{
+  "shareId": "665f0000000000000000h001",
+  "...": "share fields as above",
+  "token": "q3J8xv1mZ0o2k9n-Wc4tYb7RdLhU5aEeGfSiPjXvN6A",
+  "code": "K7M2QX9D",
+  "codeExpiresAt": "2026-10-23T10:45:00Z"
+}
+```
+
+**`POST /share/redeem` success (200)**, only the fields in `scope` are present; a field outside the scope is absent, not empty
+```json
+{
+  "readOnly": true,
+  "scope": ["medicines", "allergies"],
+  "expiresAt": "2026-10-24T10:30:00Z",
+  "medicines": [
+    { "drug": "Amoxicillin", "dose": "500 mg", "frequency": "THREE_TIMES_DAILY", "times": ["08:00","14:00","20:00"], "endDate": "2026-10-29" }
+  ],
+  "allergies": ["Penicillin"]
+}
+```
+- `readOnly` is always `true`. `allergies` is always an array (`[]` when none are recorded). `history` items use the shape of `GET /patient/{careId}/history` (section 12) without `riskFlag`.
+- The response carries `Cache-Control: no-store`. No CareID, name or phone is returned.
+- Each success increments `viewCount`, sets `lastViewedAt`, and writes an access-log entry (below).
+
+**Redeem errors** (body `{ "error": "CODE", "message": "..." }`)
+| Code | HTTP | Meaning |
+|---|---|---|
+| `INVALID_CODE` | 404 | Token or code unknown, malformed, or a short `code` past `codeExpiresAt`. One answer for all of these, so it never tells a guesser which part was wrong |
+| `SHARE_EXPIRED` | 410 | The share is past `expiresAt` |
+| `SHARE_REVOKED` | 410 | The patient revoked it (also returned after the account is soft-deleted, since that revokes every share) |
+| `TOO_MANY_ATTEMPTS` | 429 | Attempt limit reached. Body adds `retryAfterSeconds`, also sent as the `Retry-After` header |
+
+```json
+{ "error": "TOO_MANY_ATTEMPTS", "message": "Too many attempts. Try again later.", "retryAfterSeconds": 540 }
+```
+Checks run in this order: limits, lookup (`INVALID_CODE`), `SHARE_REVOKED`, `SHARE_EXPIRED`. The two 410 answers are only reachable with a correct secret.
+
+**Attempt limits (proposed values, configurable)**
+- **Per IP:** 10 failed redeems per 15 minutes. Further calls get 429 until the window passes, even with a correct secret.
+- **Per code:** 5 failed lookups of the same submitted code string per 15 minutes, so a targeted retry of one guess is stopped. This also applies to `token` strings, though a 43-character random token cannot be guessed in practice.
+- A success does not reset either counter. The window is fixed, not sliding. The limiter is in memory like the clinician share-code limiter (Open Questions), so it resets on restart and is per server instance.
+- The short `code` space is 32^8 (about 1.1 x 10^12) and the code lives 15 minutes, which together with the limits above is what makes a short code acceptable. The `token` is the secret to prefer for anything shared in writing.
+
+**Access log (section 3)**
+Every successful redeem writes one entry to the patient's access log, which the patient reads at `GET /patient/me/access-log`. The entry has no `actor` (a guest is unknown), and carries `granteeType` and the `shareId`:
+```json
+{
+  "id": "665f0000000000000000e002",
+  "at": "2026-10-23T11:05:00Z",
+  "actor": null,
+  "granteeType": "GUEST",
+  "action": "READ",
+  "resource": "GUEST_SHARE",
+  "resourceId": "665f0000000000000000h001",
+  "shareId": "665f0000000000000000h001",
+  "grantId": null,
+  "outcome": "ALLOWED"
+}
+```
+- `granteeType` is `USER` for every entry made by a signed-in actor (all existing entries) and `GUEST` for a redeem. `actor` is `null` only when `granteeType` is `GUEST`.
+- Entries hold ids only, never the data that was shown, and no IP address or other guest detail.
+- Fail closed, as in section 3: if the entry cannot be written, the redeem returns `500 AUDIT_UNAVAILABLE` and no data, and `viewCount` is not incremented.
+- Failed redeems are not written to the patient's log: a guesser has no `shareId`, so they cannot be attributed to a share, and they would let a stranger fill the log. They are counted by the limiter only.
+
+**Other rules**
+- Creating, revoking and every successful redeem need no AccessGrant. A PATIENT acts on their own data only.
+- Soft-deleting the account (section 12) revokes every share at once.
+- `token` and `code` are never logged by the server, never put in the access log, and never returned after the create response.
 
 ## 4. Facilities (hospital, pharmacy)
 
