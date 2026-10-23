@@ -1,68 +1,171 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, SafeAreaView, StatusBar,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
+  ScrollView, SafeAreaView, StatusBar, Animated, Platform, KeyboardAvoidingView,
 } from 'react-native';
-import { MOCK_PATIENT, MOCK_MEDICINES, MOCK_TODAY_SCHEDULE } from './mocks/data';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Clipboard from 'expo-clipboard';
+
+import ProfileCompletion from './ProfileCompletion';
+import BottomNav from './BottomNav';
+import FamilyTab from './FamilyTab';
+import BookTab from './BookTab';
+import QrTab from './QrTab';
+import PrivacyNotice from './PrivacyNotice';
+import {
+  MOCK_PATIENT, MOCK_PRESCRIPTIONS, MOCK_TODAY_SCHEDULE,
+  MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG,
+} from './mocks/data';
+
+const TEAL = '#0d7377';
+
+// ---- helpers --------------------------------------------------------------
+function groupByVisit(prescriptions) {
+  const groups = {};
+  prescriptions.forEach((p) => {
+    const key = p.visit_id || p.id;
+    if (!groups[key]) {
+      groups[key] = { doctor_name: p.doctor_name, hospital_name: p.hospital_name, created_at: p.created_at, drugs: [] };
+    }
+    groups[key].drugs.push(p);
+  });
+  return Object.entries(groups).sort((a, b) => new Date(withZ(b[1].created_at)) - new Date(withZ(a[1].created_at)));
+}
+
+// Timestamps are naive UTC; append Z so they parse as UTC (fixes the ~5.5h IST shift).
+function withZ(iso) {
+  if (!iso) return iso;
+  return /[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`;
+}
+
+function formatVisitDate(iso) {
+  if (!iso) return '';
+  return new Date(withZ(iso)).toLocaleString('en-IN', {
+    day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function getCourseTag(p) {
+  const dispensed = p.status?.toLowerCase().includes('dispensed');
+  if (!dispensed) return { label: 'Issued', style: 'tagIssued' };
+  const start = p.dispensed_at || p.created_at;
+  const days = parseInt(p.duration_days, 10) || 0;
+  if (start && days > 0) {
+    const end = new Date(withZ(start));
+    end.setDate(end.getDate() + days);
+    if (new Date() > end) return { label: 'Course Finished', style: 'tagFinished' };
+  }
+  return { label: 'Active', style: 'tagActive' };
+}
+
+function makeCareId() {
+  const n = () => Math.floor(1000 + Math.random() * 9000);
+  return `CARE-${n()}-${n()}`;
+}
 
 // ---------------------------------------------------------------------------
-// Curo patient app — mock-data build.
-// No backend yet — runs entirely on mock data. Three tabs: My Medicines, Today, Profile.
-// When the API contract lands, replace the mock state below with fetch calls
-// that use API_URL from config.js, and the screens stay the same.
-// ---------------------------------------------------------------------------
+function AppInner() {
+  const insets = useSafeAreaInsets();
 
-export default function App() {
-  // 'login' | 'signup' | 'app'
-  const [screen, setScreen] = useState('login');
+  const [screen, setScreen] = useState('login'); // login | signup | forgot | profile | app
+  const [overlay, setOverlay] = useState(null);   // 'privacy' | 'accesslog' | null
+  const [tab, setTab] = useState('home');          // home | today | qr | book | family | settings
 
-  // Signup form + the CareID we show after signing up.
-  const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [consentGiven, setConsentGiven] = useState(false);
   const [newCareId, setNewCareId] = useState('');
 
-  // The signed-in patient and their data (mock).
+  const [resetOtp, setResetOtp] = useState('');
+  const [sentOtp, setSentOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+
   const [patient, setPatient] = useState(null);
-  const [medicines, setMedicines] = useState([]);
+  const [prescriptions, setPrescriptions] = useState([]);
   const [schedule, setSchedule] = useState([]);
 
-  const [tab, setTab] = useState('meds'); // 'meds' | 'today' | 'profile'
+  const [search, setSearch] = useState('');
+  const [antibioticOnly, setAntibioticOnly] = useState(false);
+  const [showActive, setShowActive] = useState(false);
+  const [visitExpanded, setVisitExpanded] = useState({});
 
-  // Generate a CareID: CID- followed by 6 characters.
-  const makeCareId = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return `CID-${code}`;
+  const [toast, setToast] = useState('');
+  const fade = useRef(new Animated.Value(0)).current;
+
+  const showToast = (msg) => {
+    setToast(msg);
+    Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start(() => {
+      setTimeout(() => Animated.timing(fade, { toValue: 0, duration: 200, useNativeDriver: true }).start(), 2000);
+    });
   };
 
-  const handleSignup = () => {
-    // Pretend the backend created the account and returned a CareID.
+  const copy = async (text, label) => {
+    await Clipboard.setStringAsync(text);
+    showToast(`${label} copied`);
+  };
+
+  // ---- auth actions ----
+  const doSignup = () => {
+    if (!name || !phone || !password) return Alert.alert('Fill name, phone and password');
+    if (!consentGiven) return Alert.alert('Consent required', 'Please agree to the Privacy Notice.');
     setNewCareId(makeCareId());
   };
 
-  const handleLogin = () => {
-    // Load the mock patient and their data, then enter the app.
+  const doLogin = () => {
+    if (!phone || !password) return Alert.alert('Enter phone and password');
     setPatient(MOCK_PATIENT);
-    setMedicines(MOCK_MEDICINES);
+    setPrescriptions(MOCK_PRESCRIPTIONS);
     setSchedule(MOCK_TODAY_SCHEDULE);
-    setScreen('app');
-    setTab('meds');
+    setPassword('');
+    setScreen(MOCK_PATIENT.profile_completed ? 'app' : 'profile');
+    setTab('home');
   };
 
-  // Flip a dose between taken and not taken.
-  const toggleTaken = (doseId) => {
-    setSchedule((prev) =>
-      prev.map((d) => (d.id === doseId ? { ...d, taken: !d.taken } : d))
+  const sendResetOtp = () => {
+    if (!phone) return Alert.alert('Enter your phone number first');
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    setSentOtp(otp);
+    Alert.alert('OTP sent (demo)', `Your reset OTP is: ${otp}`);
+  };
+
+  const doReset = () => {
+    if (!resetOtp || !newPassword) return Alert.alert('Enter the OTP and a new password');
+    if (resetOtp !== sentOtp) return Alert.alert('Wrong OTP');
+    Alert.alert('Success', 'Password reset. Please log in.');
+    setResetOtp(''); setSentOtp(''); setNewPassword(''); setScreen('login');
+  };
+
+  const logout = () => {
+    setPatient(null); setPrescriptions([]); setSchedule([]);
+    setTab('home'); setShowActive(false); setVisitExpanded({}); setScreen('login');
+  };
+
+  const toggleTaken = (id) =>
+    setSchedule((prev) => prev.map((d) => (d.id === id ? { ...d, taken: !d.taken } : d)));
+
+  const toggleVisit = (key) => setVisitExpanded((v) => ({ ...v, [key]: !v[key] }));
+
+  const badgeStyleFor = (cat) => ({
+    Access: styles.badgeAccess, Watch: styles.badgeWatch,
+    Reserve: styles.badgeReserve, 'Not Recommended': styles.badgeNotRecommended,
+  }[cat] || null);
+
+  // ---- overlays ----
+  if (overlay === 'privacy') return <PrivacyNotice onBack={() => setOverlay(null)} />;
+
+  if (screen === 'profile') {
+    return (
+      <ProfileCompletion
+        existingProfile={patient?.profile_completed ? patient : null}
+        onDone={(data) => { setPatient({ ...patient, ...data }); setScreen('app'); setTab('home'); }}
+        onCancel={patient ? () => { setScreen('app'); setTab('settings'); } : null}
+      />
     );
-  };
+  }
 
-  // ----- SIGNUP -----------------------------------------------------------
+  // ---- SIGNUP ----
   if (screen === 'signup') {
-    // After signup we show the CareID and a button to continue to login.
     if (newCareId) {
       return (
         <SafeAreaView style={styles.screen}>
@@ -73,70 +176,77 @@ export default function App() {
               <Text style={styles.careIdLabel}>Your CareID</Text>
               <Text style={styles.careIdValue}>{newCareId}</Text>
               <Text style={styles.careIdNote}>
-                This is your health ID. Save it — doctors and pharmacies use it
-                to find your shared medicine record.
+                This is your health ID. Save it — doctors and pharmacies use it to find
+                your shared medicine record.
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.button}
-              onPress={() => {
-                setNewCareId('');
-                setPassword('');
-                setScreen('login');
-              }}
-            >
+            <TouchableOpacity style={styles.button} onPress={() => { setNewCareId(''); setConsentGiven(false); setScreen('login'); }}>
               <Text style={styles.buttonText}>Continue to Login</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
       );
     }
+    return (
+      <SafeAreaView style={styles.screen}>
+        <StatusBar barStyle="dark-content" />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <ScrollView contentContainerStyle={styles.authBody} keyboardShouldPersistTaps="handled">
+            <Text style={styles.brand}>Curo</Text>
+            <Text style={styles.subtitle}>Create your account</Text>
+            <TextInput style={styles.input} placeholder="Full name" value={name} onChangeText={setName} />
+            <TextInput style={styles.input} placeholder="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+            <TextInput style={styles.input} placeholder="Set a password" value={password} onChangeText={setPassword} secureTextEntry />
 
+            <TouchableOpacity style={styles.consentRow} onPress={() => setConsentGiven((v) => !v)} activeOpacity={0.7}>
+              <View style={[styles.checkbox, consentGiven && styles.checkboxOn]}>
+                {consentGiven && <Text style={styles.tick}>✓</Text>}
+              </View>
+              <Text style={styles.consentText}>
+                I agree to Curo storing my health data as described in the{' '}
+                <Text style={styles.consentLink} onPress={() => setOverlay('privacy')}>Privacy Notice</Text>.
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.button} onPress={doSignup}>
+              <Text style={styles.buttonText}>Sign Up</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setScreen('login')}>
+              <Text style={styles.link}>Already have an account? Log in</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // ---- FORGOT ----
+  if (screen === 'forgot') {
     return (
       <SafeAreaView style={styles.screen}>
         <StatusBar barStyle="dark-content" />
         <ScrollView contentContainerStyle={styles.authBody} keyboardShouldPersistTaps="handled">
           <Text style={styles.brand}>Curo</Text>
-          <Text style={styles.subtitle}>Create your account</Text>
-
-          <TextInput
-            style={styles.input}
-            placeholder="Full name"
-            value={name}
-            onChangeText={setName}
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Phone number"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Set a password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-
-          <TouchableOpacity
-            style={[styles.button, (!name || !phone || !password) && styles.buttonDisabled]}
-            onPress={handleSignup}
-            disabled={!name || !phone || !password}
-          >
-            <Text style={styles.buttonText}>Sign Up</Text>
+          <Text style={styles.subtitle}>Reset your password</Text>
+          <TextInput style={styles.input} placeholder="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+          <TouchableOpacity style={styles.buttonAlt} onPress={sendResetOtp}>
+            <Text style={styles.buttonText}>Send OTP</Text>
           </TouchableOpacity>
-
+          {sentOtp ? <Text style={styles.hint}>Demo OTP: {sentOtp}</Text> : null}
+          <TextInput style={styles.input} placeholder="Enter OTP" value={resetOtp} onChangeText={setResetOtp} keyboardType="number-pad" />
+          <TextInput style={styles.input} placeholder="New password" value={newPassword} onChangeText={setNewPassword} secureTextEntry />
+          <TouchableOpacity style={styles.button} onPress={doReset}>
+            <Text style={styles.buttonText}>Reset Password</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => setScreen('login')}>
-            <Text style={styles.link}>Already have an account? Log in</Text>
+            <Text style={styles.link}>Back to Log in</Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
     );
   }
 
-  // ----- LOGIN ------------------------------------------------------------
+  // ---- LOGIN ----
   if (screen === 'login') {
     return (
       <SafeAreaView style={styles.screen}>
@@ -144,26 +254,14 @@ export default function App() {
         <View style={styles.authBody}>
           <Text style={styles.brand}>Curo</Text>
           <Text style={styles.subtitle}>Log in to your medicine record</Text>
-
-          <TextInput
-            style={styles.input}
-            placeholder="Phone number"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-
-          <TouchableOpacity style={styles.button} onPress={handleLogin}>
+          <TextInput style={styles.input} placeholder="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+          <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
+          <TouchableOpacity style={styles.button} onPress={doLogin}>
             <Text style={styles.buttonText}>Log In</Text>
           </TouchableOpacity>
-
+          <TouchableOpacity onPress={() => setScreen('forgot')}>
+            <Text style={styles.forgot}>Forgot password?</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => setScreen('signup')}>
             <Text style={styles.link}>New here? Sign up</Text>
           </TouchableOpacity>
@@ -172,67 +270,100 @@ export default function App() {
     );
   }
 
-  // ----- MAIN APP ---------------------------------------------------------
+  // ---- MAIN APP ----
+  const q = search.toLowerCase();
+  const filtered = prescriptions.filter((p) => {
+    const match = p.drug_name?.toLowerCase().includes(q) || p.doctor_name?.toLowerCase().includes(q) || p.hospital_name?.toLowerCase().includes(q);
+    return match && (!antibioticOnly || p.is_antibiotic);
+  });
+  const active = prescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
+  const conflicts = active.filter((p) => p.allergy_conflict);
+  const activeVisits = groupByVisit(active);
+  const historyVisits = groupByVisit(filtered);
   const takenCount = schedule.filter((d) => d.taken).length;
 
-  return (
-    <SafeAreaView style={styles.screen}>
-      <StatusBar barStyle="dark-content" />
+  const title = { home: 'Curo', today: "Today's Schedule", qr: 'My QR', book: 'Book Appointment', family: 'Family', settings: 'Settings' }[tab];
 
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>
-          {tab === 'meds' ? 'My Medicines' : tab === 'today' ? "Today's Schedule" : 'Profile'}
-        </Text>
+  return (
+    <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <StatusBar barStyle="dark-content" />
+      <View style={styles.headerRow}>
+        <Text style={styles.header}>{title}</Text>
+        <TouchableOpacity onPress={() => setTab('settings')}><Text style={styles.gear}>⚙️</Text></TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {/* MY MEDICINES */}
-        {tab === 'meds' && (
+        {/* HOME */}
+        {tab === 'home' && (
           <>
-            {medicines.map((m) => (
-              <View key={m.id} style={styles.card}>
-                <View style={styles.cardTop}>
-                  <Text style={styles.drugName}>{m.drug_name}</Text>
-                  <Text style={styles.statusPill}>{m.status}</Text>
-                </View>
-                <Text style={styles.detail}>{m.dosage} · {m.frequency}</Text>
-                <Text style={styles.detailFaint}>
-                  {m.duration_days} days · {m.doctor_name}
-                </Text>
-                {m.allergy_conflict && (
-                  <View style={styles.warnBox}>
-                    <Text style={styles.warnText}>
-                      ⚠️ Conflicts with your recorded allergy. Check with your doctor.
-                    </Text>
-                  </View>
-                )}
+            <View style={styles.card}>
+              <Text style={styles.cardLabel}>CareID</Text>
+              <TouchableOpacity onPress={() => copy(patient.care_id, 'CareID')} activeOpacity={0.6}>
+                <Text style={styles.careIdInline}>{patient.care_id}  📋</Text>
+              </TouchableOpacity>
+              <View style={styles.divider} />
+              <Text style={styles.cardLabel}>Name</Text>
+              <Text style={styles.cardValue}>{patient.name}</Text>
+              <View style={styles.divider} />
+              <Text style={styles.cardLabel}>Phone</Text>
+              <Text style={styles.cardValue}>{patient.phone}</Text>
+            </View>
+
+            {patient.allergies && patient.allergies.toLowerCase() !== 'none' ? (
+              <View style={styles.allergyBanner}>
+                <Text style={styles.allergyText}>⚠️ Allergy on record: {patient.allergies}. Doctors are alerted before prescribing.</Text>
+              </View>
+            ) : null}
+
+            {/* Drug-drug interaction warnings */}
+            {MOCK_INTERACTIONS.map((ix) => (
+              <View key={ix.id} style={[styles.interactionCard, { borderLeftColor: SEVERITY_COLORS[ix.severity] }]}>
+                <Text style={styles.interactionTitle}>🚨 {ix.drug_a} + {ix.drug_b} — {ix.warning}</Text>
+                <Text style={styles.interactionText}>{ix.explanation}</Text>
+                <Text style={[styles.severityLabel, { color: SEVERITY_COLORS[ix.severity] }]}>{ix.severity.toUpperCase()} INTERACTION</Text>
               </View>
             ))}
+
+            {conflicts.length > 0 ? (
+              <View style={styles.conflictBanner}>
+                <Text style={styles.conflictTitle}>🚨 Allergy Conflict</Text>
+                <Text style={styles.conflictText}>
+                  {conflicts.length === 1 ? `${conflicts[0].drug_name} conflicts with your recorded allergies.` : `${conflicts.length} active medicines conflict with your allergies.`} Contact your doctor before taking.
+                </Text>
+              </View>
+            ) : null}
+
+            {active.length === 0 ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyIcon}>📋</Text>
+                <Text style={styles.emptyTitle}>No active prescriptions</Text>
+              </View>
+            ) : (
+              <>
+                <TouchableOpacity style={styles.bigButton} onPress={() => setShowActive((v) => !v)}>
+                  <Text style={styles.bigButtonText}>{showActive ? '▲  Hide Active Prescriptions' : `📋  Show Active Prescriptions (${active.length})`}</Text>
+                </TouchableOpacity>
+                {showActive && activeVisits.map(([key, visit]) => (
+                  <VisitCard key={key} visit={visit} open={visitExpanded[key]} onToggle={() => toggleVisit(key)} badgeStyleFor={badgeStyleFor} showFlags />
+                ))}
+              </>
+            )}
           </>
         )}
 
-        {/* TODAY'S SCHEDULE */}
+        {/* TODAY */}
         {tab === 'today' && (
           <>
-            <Text style={styles.progress}>
-              {takenCount} of {schedule.length} doses taken
-            </Text>
+            <Text style={styles.progress}>{takenCount} of {schedule.length} doses taken</Text>
             {schedule.map((d) => (
               <View key={d.id} style={[styles.card, d.taken && styles.cardDone]}>
                 <View style={styles.doseRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.drugName, d.taken && styles.doneText]}>
-                      {d.drug_name}
-                    </Text>
-                    <Text style={styles.detail}>{d.dosage} · {d.time}</Text>
+                    <Text style={[styles.drugName, d.taken && styles.doneText]}>{d.drug_name}</Text>
+                    <Text style={styles.cardValue}>{d.dosage} · {d.time}</Text>
                   </View>
-                  <TouchableOpacity
-                    style={[styles.markButton, d.taken && styles.markButtonDone]}
-                    onPress={() => toggleTaken(d.id)}
-                  >
-                    <Text style={[styles.markButtonText, d.taken && styles.markButtonTextDone]}>
-                      {d.taken ? '✓ Taken' : 'Mark taken'}
-                    </Text>
+                  <TouchableOpacity style={[styles.markBtn, d.taken && styles.markBtnDone]} onPress={() => toggleTaken(d.id)}>
+                    <Text style={[styles.markBtnText, d.taken && styles.markBtnTextDone]}>{d.taken ? '✓ Taken' : 'Mark taken'}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -240,111 +371,233 @@ export default function App() {
           </>
         )}
 
-        {/* PROFILE */}
-        {tab === 'profile' && patient && (
+        {/* HISTORY lives in settings menu button; keep a History view reachable from Home's search?
+            We surface History under its own in-app view via the search field here on Home-less tabs. */}
+
+        {/* QR */}
+        {tab === 'qr' && <QrTab careId={patient.care_id} onRefresh={() => showToast('QR refreshed')} refreshing={false} />}
+
+        {/* BOOK */}
+        {tab === 'book' && <BookTab />}
+
+        {/* FAMILY */}
+        {tab === 'family' && <FamilyTab />}
+
+        {/* SETTINGS */}
+        {tab === 'settings' && !overlay && (
           <>
             <View style={styles.card}>
-              <Text style={styles.cardLabel}>CareID</Text>
-              <Text style={styles.careIdInline}>{patient.care_id}</Text>
-              <View style={styles.divider} />
-              <Text style={styles.cardLabel}>Name</Text>
-              <Text style={styles.detail}>{patient.name}</Text>
-              <View style={styles.divider} />
-              <Text style={styles.cardLabel}>Phone</Text>
-              <Text style={styles.detail}>{patient.phone}</Text>
-              <View style={styles.divider} />
-              <Text style={styles.cardLabel}>Allergies</Text>
-              <Text style={styles.warnText}>{patient.allergies || 'None'}</Text>
+              <Text style={styles.cardLabel}>Logged in as</Text>
+              <Text style={styles.cardValue}>{patient.name}</Text>
+              <Text style={styles.cardValueFaint}>{patient.phone} · {patient.care_id}</Text>
             </View>
-
-            <TouchableOpacity
-              style={styles.logoutButton}
-              onPress={() => {
-                setPatient(null);
-                setPassword('');
-                setScreen('login');
-              }}
-            >
-              <Text style={styles.logoutText}>Log Out</Text>
+            <SettingsItem text="✏️  Edit Personal Details" onPress={() => setScreen('profile')} />
+            <SettingsItem text="🧾  Prescription History" onPress={() => setTab('history')} />
+            <SettingsItem text="👁️  Who Viewed My Record" onPress={() => setTab('accesslog')} />
+            <SettingsItem text="🔒  Privacy Notice" onPress={() => setOverlay('privacy')} />
+            <SettingsItem text="ℹ️  About Curo" onPress={() => Alert.alert('Curo', 'Version 1.0 (demo)')} />
+            <TouchableOpacity style={styles.logoutButton} onPress={logout}><Text style={styles.buttonText}>Log Out</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.deleteButton} onPress={() => Alert.alert('Delete Account', 'This permanently deletes your account.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: logout }])}>
+              <Text style={styles.deleteText}>🗑️  Delete Account</Text>
             </TouchableOpacity>
+          </>
+        )}
+
+        {/* HISTORY (reached from Settings) */}
+        {tab === 'history' && (
+          <>
+            <TouchableOpacity onPress={() => setTab('settings')}><Text style={styles.link}>‹ Back to Settings</Text></TouchableOpacity>
+            <TextInput style={[styles.input, { marginTop: 12 }]} placeholder="🔍 Search by drug, doctor, clinic" value={search} onChangeText={setSearch} />
+            <TouchableOpacity style={[styles.filterToggle, antibioticOnly && styles.filterToggleOn]} onPress={() => setAntibioticOnly((v) => !v)}>
+              <Text style={[styles.filterText, antibioticOnly && styles.filterTextOn]}>{antibioticOnly ? '✓ Antibiotics only' : '💊 Antibiotics only'}</Text>
+            </TouchableOpacity>
+            {historyVisits.length === 0 ? (
+              <View style={styles.empty}><Text style={styles.emptyTitle}>No history found</Text></View>
+            ) : historyVisits.map(([key, visit]) => (
+              <VisitCard key={key} visit={visit} open={visitExpanded[key]} onToggle={() => toggleVisit(key)} badgeStyleFor={badgeStyleFor} />
+            ))}
+          </>
+        )}
+
+        {/* ACCESS LOG (reached from Settings) */}
+        {tab === 'accesslog' && (
+          <>
+            <TouchableOpacity onPress={() => setTab('settings')}><Text style={styles.link}>‹ Back to Settings</Text></TouchableOpacity>
+            <Text style={styles.sectionTitle}>Who viewed your record</Text>
+            {MOCK_ACCESS_LOG.map((a) => (
+              <View key={a.id} style={styles.card}>
+                <Text style={styles.drugName}>{a.who}</Text>
+                <Text style={styles.cardValue}>{a.role} · {a.org}</Text>
+                <Text style={styles.cardValueFaint}>{a.action} · {formatVisitDate(a.at)}</Text>
+              </View>
+            ))}
           </>
         )}
       </ScrollView>
 
-      {/* BOTTOM TABS */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity style={styles.tabItem} onPress={() => setTab('meds')}>
-          <Text style={[styles.tabText, tab === 'meds' && styles.tabTextActive]}>💊{'\n'}Medicines</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => setTab('today')}>
-          <Text style={[styles.tabText, tab === 'today' && styles.tabTextActive]}>📅{'\n'}Today</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => setTab('profile')}>
-          <Text style={[styles.tabText, tab === 'profile' && styles.tabTextActive]}>👤{'\n'}Profile</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+      {['home', 'today', 'qr', 'book', 'family'].includes(tab) && (
+        <BottomNav activeTab={tab} onTabPress={setTab} />
+      )}
+
+      <Animated.View style={[styles.toast, { opacity: fade }]} pointerEvents="none">
+        <Text style={styles.toastText}>{toast}</Text>
+      </Animated.View>
+    </View>
   );
 }
 
-const TEAL = '#0d7377';
+// Visit card used by Home (active) and History
+function VisitCard({ visit, open, onToggle, badgeStyleFor, showFlags }) {
+  return (
+    <View style={styles.visitCard}>
+      <TouchableOpacity onPress={onToggle} activeOpacity={0.75}>
+        <Text style={styles.visitDoctor}>{visit.doctor_name || 'Unknown Doctor'}</Text>
+        <Text style={styles.visitHospital}>{visit.hospital_name || 'Unknown Hospital'}</Text>
+        <Text style={styles.visitDate}>{formatVisitDate(visit.created_at)}</Text>
+      </TouchableOpacity>
+      {open && (
+        <View style={styles.visitDrugs}>
+          {visit.drugs.map((p) => {
+            const tag = getCourseTag(p);
+            return (
+              <View key={p.id} style={styles.drugRow}>
+                <View style={styles.rxHeader}>
+                  <Text style={styles.visitDrugName}>{p.drug_name}</Text>
+                  {p.aware_category ? (
+                    <View style={[styles.badge, badgeStyleFor(p.aware_category)]}><Text style={styles.badgeText}>{p.aware_category}</Text></View>
+                  ) : null}
+                </View>
+                <Text style={styles.cardValue}>{p.dosage} · {p.duration_days} days</Text>
+                <View style={[styles.courseTag, styles[tag.style]]}><Text style={styles.courseTagText}>{tag.label}</Text></View>
+                {showFlags && p.allergy_conflict ? <Text style={styles.flag}>⚠️ Conflicts with your allergies</Text> : null}
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function SettingsItem({ text, onPress }) {
+  return (
+    <TouchableOpacity style={styles.settingsItem} onPress={onPress}>
+      <Text style={styles.settingsItemText}>{text}</Text>
+    </TouchableOpacity>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppInner />
+    </SafeAreaProvider>
+  );
+}
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f0f7f7' },
 
-  // Auth
   authBody: { flexGrow: 1, justifyContent: 'center', padding: 24 },
   brand: { fontSize: 32, fontWeight: 'bold', color: TEAL, textAlign: 'center', marginBottom: 4 },
   subtitle: { fontSize: 15, color: '#555', textAlign: 'center', marginBottom: 24 },
   input: { backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#cde' },
   button: { backgroundColor: TEAL, borderRadius: 10, padding: 15, alignItems: 'center', marginTop: 4 },
-  buttonDisabled: { backgroundColor: '#9bc4c5' },
+  buttonAlt: { backgroundColor: '#14a1a6', borderRadius: 10, padding: 15, alignItems: 'center', marginBottom: 12 },
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  link: { color: TEAL, textAlign: 'center', marginTop: 20 },
+  link: { color: TEAL, textAlign: 'center', marginTop: 16, fontWeight: '600' },
+  forgot: { color: '#14a1a6', textAlign: 'center', marginTop: 14, fontWeight: '600' },
+  hint: { color: '#c00', textAlign: 'center', marginBottom: 8, fontWeight: '600' },
 
-  // CareID reveal after signup
+  consentRow: { flexDirection: 'row', alignItems: 'flex-start', marginVertical: 12 },
+  checkbox: { width: 22, height: 22, borderRadius: 5, borderWidth: 2, borderColor: TEAL, marginRight: 10, marginTop: 1, alignItems: 'center', justifyContent: 'center' },
+  checkboxOn: { backgroundColor: TEAL },
+  tick: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  consentText: { flex: 1, fontSize: 13, color: '#333', lineHeight: 19 },
+  consentLink: { color: TEAL, fontWeight: '700', textDecorationLine: 'underline' },
+
   careIdCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 24, borderWidth: 2, borderColor: TEAL },
   careIdLabel: { fontSize: 12, color: '#8a9a9a', textTransform: 'uppercase', letterSpacing: 1 },
-  careIdValue: { fontSize: 30, fontWeight: 'bold', color: TEAL, marginVertical: 8, letterSpacing: 2 },
+  careIdValue: { fontSize: 26, fontWeight: 'bold', color: TEAL, marginVertical: 8, letterSpacing: 1 },
   careIdNote: { fontSize: 13, color: '#667', textAlign: 'center', lineHeight: 19 },
 
-  // Header
-  header: { padding: 20, paddingBottom: 12 },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: TEAL },
-
-  // Content + cards
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 },
+  header: { fontSize: 24, fontWeight: 'bold', color: TEAL },
+  gear: { fontSize: 20 },
   content: { padding: 16, paddingBottom: 24 },
+
   card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 12, elevation: 2 },
   cardDone: { backgroundColor: '#eef7f0' },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  drugName: { fontSize: 17, fontWeight: '700', color: '#1a3c3d' },
-  statusPill: { fontSize: 11, color: TEAL, backgroundColor: '#e3f1f1', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, overflow: 'hidden', textTransform: 'capitalize' },
-  detail: { fontSize: 14, color: '#445', marginTop: 4 },
-  detailFaint: { fontSize: 13, color: '#8a9a9a', marginTop: 2 },
   cardLabel: { fontSize: 11, color: '#8a9a9a', textTransform: 'uppercase', letterSpacing: 0.5 },
+  cardValue: { fontSize: 15, color: '#445', marginTop: 4 },
+  cardValueFaint: { fontSize: 13, color: '#8a9a9a', marginTop: 2 },
   careIdInline: { fontSize: 18, fontWeight: '700', color: TEAL, marginTop: 2, letterSpacing: 1 },
   divider: { height: 1, backgroundColor: '#eef2f2', marginVertical: 10 },
+  drugName: { fontSize: 16, fontWeight: '700', color: '#1a3c3d' },
 
-  // Allergy warning
-  warnBox: { backgroundColor: '#fff3f3', borderRadius: 8, padding: 10, marginTop: 10, borderWidth: 1, borderColor: '#f0c0c0' },
-  warnText: { color: '#c0392b', fontSize: 13, fontWeight: '600' },
+  allergyBanner: { backgroundColor: '#fff3f3', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#f0c0c0' },
+  allergyText: { color: '#c0392b', fontSize: 13, fontWeight: '600' },
 
-  // Today
+  interactionCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 12, borderLeftWidth: 5, elevation: 2 },
+  interactionTitle: { fontSize: 15, fontWeight: '700', color: '#1a3c3d', marginBottom: 6 },
+  interactionText: { fontSize: 13, color: '#445', lineHeight: 19 },
+  severityLabel: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginTop: 8 },
+
+  conflictBanner: { backgroundColor: '#7d1128', borderRadius: 12, padding: 16, marginBottom: 12 },
+  conflictTitle: { color: '#fff', fontSize: 15, fontWeight: '800', marginBottom: 6 },
+  conflictText: { color: '#ffe0e0', fontSize: 13, fontWeight: '600', lineHeight: 18 },
+
+  empty: { alignItems: 'center', padding: 30 },
+  emptyIcon: { fontSize: 40, marginBottom: 10 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#333' },
+
+  bigButton: { backgroundColor: TEAL, borderRadius: 12, padding: 16, alignItems: 'center', marginBottom: 8 },
+  bigButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+
   progress: { fontSize: 14, fontWeight: '600', color: '#5a6a6a', marginBottom: 12 },
   doseRow: { flexDirection: 'row', alignItems: 'center' },
   doneText: { textDecorationLine: 'line-through', color: '#8a9a9a' },
-  markButton: { backgroundColor: TEAL, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
-  markButtonDone: { backgroundColor: '#cfe8d6' },
-  markButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  markButtonTextDone: { color: '#2e7d4f' },
+  markBtn: { backgroundColor: TEAL, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
+  markBtnDone: { backgroundColor: '#cfe8d6' },
+  markBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  markBtnTextDone: { color: '#2e7d4f' },
 
-  // Profile
-  logoutButton: { backgroundColor: '#fff3f3', borderRadius: 10, padding: 15, alignItems: 'center', marginTop: 8, borderWidth: 1, borderColor: '#f0c0c0' },
-  logoutText: { color: '#c0392b', fontWeight: '700', fontSize: 15 },
+  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#5a6a6a', marginVertical: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  // Tab bar
-  tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e0eaea', paddingVertical: 8 },
-  tabItem: { flex: 1, alignItems: 'center' },
-  tabText: { fontSize: 11, color: '#8a9a9a', textAlign: 'center', fontWeight: '600' },
-  tabTextActive: { color: TEAL },
+  filterToggle: { backgroundColor: '#fff', borderRadius: 10, padding: 12, alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: '#cde' },
+  filterToggleOn: { backgroundColor: TEAL, borderColor: TEAL },
+  filterText: { color: TEAL, fontWeight: '700', fontSize: 13 },
+  filterTextOn: { color: '#fff' },
+
+  visitCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 10, elevation: 1 },
+  visitDoctor: { fontSize: 16, fontWeight: '700', color: TEAL },
+  visitHospital: { fontSize: 13, color: '#666', marginTop: 2 },
+  visitDate: { fontSize: 12, color: '#8a9a9a', marginTop: 4 },
+  visitDrugs: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#eef2f2', paddingTop: 10 },
+  drugRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f5f8f8' },
+  rxHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  visitDrugName: { fontSize: 14, fontWeight: '600', color: TEAL, flexShrink: 1, marginRight: 8 },
+  flag: { color: '#c0392b', fontSize: 12, fontWeight: '700', marginTop: 8 },
+
+  courseTag: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, marginTop: 6 },
+  courseTagText: { fontSize: 11, fontWeight: '700' },
+  tagIssued: { backgroundColor: '#eef2f2' },
+  tagActive: { backgroundColor: '#e3f5ea' },
+  tagFinished: { backgroundColor: '#eef0f5' },
+
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  badgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  badgeAccess: { backgroundColor: '#2e9e5b' },
+  badgeWatch: { backgroundColor: '#e08e0b' },
+  badgeReserve: { backgroundColor: '#c0392b' },
+  badgeNotRecommended: { backgroundColor: '#7d1128' },
+
+  settingsItem: { backgroundColor: '#fff', borderRadius: 12, padding: 16, marginTop: 10 },
+  settingsItemText: { fontSize: 15, color: '#333', fontWeight: '600' },
+  logoutButton: { backgroundColor: '#8a4b4b', borderRadius: 10, padding: 15, alignItems: 'center', marginTop: 24 },
+  deleteButton: { backgroundColor: '#fff3f3', borderRadius: 10, padding: 15, alignItems: 'center', marginTop: 12, borderWidth: 1, borderColor: '#f0c0c0' },
+  deleteText: { color: '#c0392b', fontWeight: '700', fontSize: 15 },
+
+  toast: { position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: '#333', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 25, elevation: 5 },
+  toastText: { color: '#fff', fontSize: 14, fontWeight: '600' },
 });
