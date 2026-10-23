@@ -9,4 +9,6 @@ public interface LicenceVerificationService {
     LicenceVerificationResult verifyDoctor(String licenceNumber, String stateCouncil, String name);
 
     LicenceVerificationResult verifyPharmacy(String drugLicenceNumber, String gstin, String state, String name);
+
+    LicenceVerificationResult verifyHospital(String licenceNumber, String gstin, String state, String name);
 }

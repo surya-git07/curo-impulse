@@ -32,9 +32,10 @@ import java.util.Set;
 @Service
 public class AuthService {
 
-    private static final Set<String> SELF_SIGNUP_ROLES = Set.of("PATIENT", "CAREGIVER");
+    private static final Set<String> SELF_SIGNUP_ROLES = Set.of("PATIENT", "CAREGIVER", "RECEPTION");
     private static final String DOCTOR = "DOCTOR";
     private static final String PHARMACY = "PHARMACY";
+    private static final String HOSPITAL = "HOSPITAL";
     private static final int MIN_PASSWORD_CHARS = 8;
     private static final int MAX_PASSWORD_BYTES = 72; // bcrypt limit
     private static final int CARE_ID_ATTEMPTS = 10;
@@ -65,10 +66,10 @@ public class AuthService {
 
     public SignupResponse signup(SignupRequest request) {
         String role = request.getRole().trim().toUpperCase(Locale.ROOT);
-        boolean licenced = DOCTOR.equals(role) || PHARMACY.equals(role);
+        boolean licenced = DOCTOR.equals(role) || PHARMACY.equals(role) || HOSPITAL.equals(role);
         if (!licenced && !SELF_SIGNUP_ROLES.contains(role)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ROLE",
-                    "Role must be PATIENT, CAREGIVER, DOCTOR or PHARMACY.");
+                    "Role must be PATIENT, CAREGIVER, RECEPTION, DOCTOR, PHARMACY or HOSPITAL.");
         }
 
         var consentIn = request.getConsent();
@@ -100,6 +101,11 @@ public class AuthService {
         } else if (PHARMACY.equals(role)) {
             checkPharmacyLicence(request, user);
             // the pharmacy record is created after the user; its id is fixed now so the user can point at it in one write
+            user.setFacilityId(new ObjectId().toHexString());
+            user.setFacilityName(user.getName());
+        } else if (HOSPITAL.equals(role)) {
+            checkHospitalLicence(request, user);
+            // no separate hospital record yet (the old one is legacy JPA); the id only names the facility for this account
             user.setFacilityId(new ObjectId().toHexString());
             user.setFacilityName(user.getName());
         }
@@ -218,18 +224,7 @@ public class AuthService {
                     "state must be an ISO 3166-2:IN code such as TN or KA.");
         }
 
-        String gstin = GstinValidator.normalize(request.getGstin());
-        switch (GstinValidator.validate(gstin, state)) {
-            case VALID -> { }
-            case INVALID_FORMAT -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_GSTIN",
-                    "GSTIN must be 15 characters in the standard format.");
-            case UNKNOWN_STATE_CODE -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_GSTIN",
-                    "GSTIN starts with an unknown state code.");
-            case STATE_MISMATCH -> throw new ApiException(HttpStatus.BAD_REQUEST, "GSTIN_STATE_MISMATCH",
-                    "The GSTIN state code does not belong to the state entered.");
-            case INVALID_CHECK_CHARACTER -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_GSTIN",
-                    "GSTIN check character is wrong.");
-        }
+        String gstin = checkGstin(request.getGstin(), state);
 
         if (userRepository.existsByDrugLicenceNumber(number)) {
             throw licenceTaken();
@@ -241,6 +236,52 @@ public class AuthService {
         user.setDrugLicenceNumber(number);
         user.setGstin(gstin);
         user.setState(state);
+    }
+
+    private void checkHospitalLicence(SignupRequest request, AppUser user) {
+        if (isBlank(request.getLicenceNumber()) || isBlank(request.getGstin()) || isBlank(request.getState())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "LICENCE_FIELDS_REQUIRED",
+                    "licenceNumber, gstin and state are required for HOSPITAL signup.");
+        }
+        String number = LicenceNumbers.normalize(request.getLicenceNumber());
+        if (!LicenceNumbers.isValidHospitalNumber(number)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, LicenceVerificationResult.INVALID_NUMBER,
+                    "Hospital licence number format is not recognised.");
+        }
+        String state = request.getState().trim().toUpperCase(Locale.ROOT);
+        if (!IndianStates.isKnownIso(state)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_STATE",
+                    "state must be an ISO 3166-2:IN code such as TN or KA.");
+        }
+        String gstin = checkGstin(request.getGstin(), state);
+
+        if (userRepository.existsByLicenceNumber(number)) {
+            throw licenceTaken();
+        }
+
+        LicenceVerificationResult result = licenceVerificationService.verifyHospital(number, gstin, state, user.getName());
+        rejectOrRecord(result, user);
+
+        user.setLicenceNumber(number);
+        user.setGstin(gstin);
+        user.setState(state);
+    }
+
+    // normalised GSTIN, or a 400 saying what is wrong with it
+    private String checkGstin(String raw, String state) {
+        String gstin = GstinValidator.normalize(raw);
+        switch (GstinValidator.validate(gstin, state)) {
+            case VALID -> { }
+            case INVALID_FORMAT -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_GSTIN",
+                    "GSTIN must be 15 characters in the standard format.");
+            case UNKNOWN_STATE_CODE -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_GSTIN",
+                    "GSTIN starts with an unknown state code.");
+            case STATE_MISMATCH -> throw new ApiException(HttpStatus.BAD_REQUEST, "GSTIN_STATE_MISMATCH",
+                    "The GSTIN state code does not belong to the state entered.");
+            case INVALID_CHECK_CHARACTER -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_GSTIN",
+                    "GSTIN check character is wrong.");
+        }
+        return gstin;
     }
 
     // REJECTED becomes a 400 with the result's code; VERIFIED and PENDING are kept on the user

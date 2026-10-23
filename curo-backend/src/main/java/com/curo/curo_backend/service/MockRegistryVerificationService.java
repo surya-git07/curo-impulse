@@ -54,8 +54,22 @@ public class MockRegistryVerificationService implements LicenceVerificationServi
             return LicenceVerificationResult.rejected(LicenceVerificationResult.INVALID_NUMBER,
                     "Drug licence number format is not recognised.");
         }
+        return verifyFacility(LicenceRegistryEntry.PHARMACY, number, gstin, state, name);
+    }
 
-        Optional<LicenceRegistryEntry> found = registryRepository.findByTypeAndLicenceNumber(LicenceRegistryEntry.PHARMACY, number);
+    @Override
+    public LicenceVerificationResult verifyHospital(String licenceNumber, String gstin, String state, String name) {
+        String number = LicenceNumbers.normalize(licenceNumber);
+        if (!LicenceNumbers.isValidHospitalNumber(number)) {
+            return LicenceVerificationResult.rejected(LicenceVerificationResult.INVALID_NUMBER,
+                    "Hospital licence number format is not recognised.");
+        }
+        return verifyFacility(LicenceRegistryEntry.HOSPITAL, number, gstin, state, name);
+    }
+
+    // pharmacies and hospitals are checked the same way: number, then name, state and GSTIN against the registry entry
+    private LicenceVerificationResult verifyFacility(String type, String number, String gstin, String state, String name) {
+        Optional<LicenceRegistryEntry> found = registryRepository.findByTypeAndLicenceNumber(type, number);
         if (found.isEmpty()) {
             return LicenceVerificationResult.pending(LicenceVerificationResult.NOT_IN_REGISTRY, NOT_LISTED);
         }

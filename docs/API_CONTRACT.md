@@ -15,6 +15,10 @@ Derived by reading the old apps in `_reference/` (hospital-backend, hospital-sit
 
 **Changes since v0.3 (build-status audit):** every endpoint in this file was checked against the controllers on `main`. Those with no active mapping are marked **NOT BUILT** (in the Status column, or in the heading). Most of them exist only as disabled legacy code (`@Profile("legacy-jpa")`, which is off by default), so a client that calls them gets 404 or 403 today. `GET /auth/me` is the one endpoint added in this pass. `GET /patient/me/prescriptions/detailed` is NOT BUILT and replaced by `GET /patient/me/medications` (section 12). Only `/auth/signup` and `/auth/login` are public under `/auth`.
 
+**Changes since v0.3 (RECEPTION signup):** `POST /auth/signup` accepts role `RECEPTION` (front desk). It is a self-signup role like PATIENT: no licence or council fields, no approval, it can sign in straight away. It is a different role from `ADMIN`, which is not a signup role. RECEPTION cannot prescribe, dispense, request access or read patient data. The frontend dropdown is Reception, Doctor, Pharmacy, Hospital. This replaces the earlier note that Reception never self-signs-up.
+
+**Changes since v0.3 (HOSPITAL signup):** `POST /auth/signup` accepts role `HOSPITAL` (section 2). A hospital account is a facility login only: it cannot prescribe, dispense, request access or read patient data. Signup in the frontend offers Doctor, Pharmacy and Hospital. The licence registry also holds `CLINIC` and `HOSPITAL` entries.
+
 **Changes in v0.3:** `name` is the only name field for every role (`fullName` removed). Licence signup rewritten (section 2): doctors send `licenceNumber`, `stateCouncil`, `name`; pharmacies send `drugLicenceNumber`, `gstin`, `state`, `name`. The response carries `verificationStatus` (`VERIFIED` or `PENDING`) with `verificationReasonCode` and `verificationReason`, replacing `status` / `statusReason`. `VERIFIED` only on a match against a mock `licence_registry`; otherwise `PENDING` for SUPER_ADMIN approval. Wrong number format, wrong name, wrong state and wrong GSTIN return distinct 400 codes; a duplicate licence returns 409. GSTIN validation rules added. The sample GSTIN in the pharmacy example was replaced because the old one failed the check character.
 
 ## 1. Conventions
@@ -23,7 +27,7 @@ Derived by reading the old apps in `_reference/` (hospital-backend, hospital-sit
 - JSON in and out. Field names are **camelCase** (the old patient-app used snake_case against a separate Python service; that service is merged into this backend, see Open Questions).
 - Auth: `Authorization: Bearer <JWT>`. JWT is signed with `JWT_SECRET` (env only).
 - IDs: old system used SQL integer ids. New system uses MongoDB string ids (`"id": "665f..."`). Patients are identified externally by **CareID**, never by ABHA.
-- Roles: `DOCTOR`, `PATIENT`, `CAREGIVER`, `PHARMACY`, `ADMIN`, `SUPER_ADMIN`. The old `RECEPTION` role is folded into `ADMIN`. `SUPER_ADMIN` (old role, kept) verifies facilities and staff accounts. Neither ADMIN nor SUPER_ADMIN can read patient data (section 3).
+- Roles: `DOCTOR`, `PATIENT`, `CAREGIVER`, `PHARMACY`, `HOSPITAL`, `RECEPTION`, `ADMIN`, `SUPER_ADMIN`. `RECEPTION` (front desk) is its own role again and self-signs-up; it replaces the earlier plan to fold it into `ADMIN`. `SUPER_ADMIN` (old role, kept) verifies facilities and staff accounts. Neither ADMIN nor SUPER_ADMIN can read patient data (section 3).
 - Errors: the old backend returned bare strings as bodies. New contract: `{ "error": "CODE", "message": "human text" }` with the same HTTP statuses.
 - Paged lists (new endpoints only): `?page=0&size=20` (size max 100), response `{ "page": 0, "size": 20, "total": 134, "items": [ ... ] }`. Older endpoints keep returning plain arrays.
 - Timestamps are ISO-8601 UTC strings. Dates are `YYYY-MM-DD`.
@@ -109,11 +113,62 @@ Creates an account with recorded consent and issues a CareID. Consent is mandato
 ```
 `address` is optional free text. Signup creates the pharmacy record that the account dispenses as. (Coordinates, geocoding and the nearby finder were removed.)
 
-**`name` is the only name field** for every role (the earlier `fullName` is gone). For PATIENT/CAREGIVER/DOCTOR it is the person's name; for PHARMACY it is the licensee name above.
+**RECEPTION** (built; no licence, no council, no GSTIN; `name` is the person's name)
+```json
+// request
+{
+  "role": "RECEPTION",
+  "name": "Test Receptionist",
+  "phone": "9000000020",
+  "password": "min 8 chars",
+  "consent": { "accepted": true, "policyVersion": "2026-10-01" }
+}
+// 201 response (no verification fields, no facilityId)
+{
+  "id": "665f0000000000000000a020",
+  "careId": "CID-4HJ8WQ",
+  "name": "Test Receptionist",
+  "role": "RECEPTION",
+  "consent": { "accepted": true, "policyVersion": "2026-10-01", "acceptedAt": "2026-10-23T10:35:00Z" }
+}
+```
+Consent is required as for every role. The account is active at once and can sign in with its CareID or phone. **A RECEPTION account cannot prescribe, dispense, request access (`POST /access-grants`, 403 `FORBIDDEN_ROLE`) or read patient data (403).** The check-in and queue endpoints in section 6 are meant for it but are NOT BUILT, so the frontend Reception page is a placeholder.
 
-**Licence verification (DOCTOR and PHARMACY only; `verificationStatus`, `verificationReasonCode` and `verificationReason` are absent for PATIENT and CAREGIVER)**
+**HOSPITAL** (built; `name` is the hospital name exactly as in the registry; the licence number, state and GSTIN are all required)
+```json
+// request
+{
+  "role": "HOSPITAL",
+  "name": "Kochi Lakeshore Hospital",
+  "phone": "9000000010",
+  "password": "min 8 chars",
+  "licenceNumber": "KL-HOSP-31182",
+  "gstin": "32AAKCK5507R1Z2",
+  "state": "KL",
+  "consent": { "accepted": true, "policyVersion": "2026-10-01" }
+}
+// 201 response, matched the registry
+{
+  "id": "665f0000000000000000a010",
+  "careId": "CID-4HJ8WQ",
+  "name": "Kochi Lakeshore Hospital",
+  "role": "HOSPITAL",
+  "facilityId": "665f0000000000000000c010",
+  "verificationStatus": "VERIFIED",
+  "verificationReasonCode": "LICENCE_MATCHED",
+  "verificationReason": "Licence number, name and state match the licence registry.",
+  "consent": { "accepted": true, "policyVersion": "2026-10-01", "acceptedAt": "2026-10-23T10:30:00Z" }
+}
+```
+Checked with the same rules as a pharmacy: format, `state` is an ISO code, the GSTIN passes the check and its state code matches `state`, then the registry (`HOSPITAL` entries). `VERIFIED` on a match; a well-formed number that is not in the registry is `PENDING` for a SUPER_ADMIN (section 2, account review); a wrong name, state or GSTIN for a registered number is a 400 with the codes in the error table. A licence number already used by another account is `409 LICENCE_TAKEN`. The number is stored in the account's `licenceNumber`. `facilityId` and `facilityName` are set on the account; there is no separate hospital record yet (the old `/hospital/*` endpoints are NOT BUILT). **A HOSPITAL account cannot prescribe, dispense, request access (`POST /access-grants`, 403 `FORBIDDEN_ROLE`) or read patient data (403).**
+
+**`name` is the only name field** for every role (the earlier `fullName` is gone). For PATIENT/CAREGIVER/DOCTOR it is the person's name; for PHARMACY it is the licensee name above; for HOSPITAL it is the hospital name.
+
+**Licence verification (DOCTOR, PHARMACY and HOSPITAL only; `verificationStatus`, `verificationReasonCode` and `verificationReason` are absent for PATIENT and CAREGIVER)**
 
 The server asks a `LicenceVerificationService`. The MVP implementation is a **mock registry**: a `licence_registry` MongoDB collection of invented records, switched on by `licence.verification.mode=mock`. No government registry is called, so VERIFIED here means "matches the mock registry". The same contract holds when a real registry replaces it.
+
+**Demo mode:** setting `licence.verification.mode=demo-accept` (env `LICENCE_VERIFICATION_MODE=demo-accept`; the default stays `mock`) skips the registry lookup and the name match, so a licence that passes the format, GSTIN and state checks is `VERIFIED` with reason code `LICENCE_ACCEPTED_DEMO`; bad formats and GSTINs keep their error codes and duplicates are still `409 LICENCE_TAKEN`. For demos only; the server logs a WARN at startup.
 
 Checks run in this order and stop at the first failure:
 | # | Check | Outcome |
@@ -144,15 +199,15 @@ Checks run in this order and stop at the first failure:
 **Licence signup error codes** (body `{ "error": "<code>", "message": "..." }`; messages never repeat registry data)
 | Code | HTTP | Meaning | Roles |
 |---|---|---|---|
-| `LICENCE_FIELDS_REQUIRED` | 400 | A required licence field is missing or blank | DOCTOR, PHARMACY |
-| `INVALID_LICENCE_NUMBER` | 400 | Licence number is not in a recognised format | DOCTOR, PHARMACY |
-| `INVALID_STATE` | 400 | `state` is not an ISO 3166-2:IN code such as `TN` | PHARMACY |
-| `INVALID_GSTIN` | 400 | GSTIN has the wrong length or pattern, an unknown state code, or a wrong check character | PHARMACY |
-| `GSTIN_STATE_MISMATCH` | 400 | GSTIN is well formed but its state code belongs to a different state than `state` | PHARMACY |
-| `LICENCE_TAKEN` | 409 | Another account already uses this licence number | DOCTOR, PHARMACY |
-| `LICENCE_NAME_MISMATCH` | 400 | Number is in the registry but `name` differs | DOCTOR, PHARMACY |
-| `LICENCE_STATE_MISMATCH` | 400 | Number is in the registry but `stateCouncil` (doctor) or `state` (pharmacy) differs | DOCTOR, PHARMACY |
-| `LICENCE_GSTIN_MISMATCH` | 400 | Number is in the registry but `gstin` differs | PHARMACY |
+| `LICENCE_FIELDS_REQUIRED` | 400 | A required licence field is missing or blank | DOCTOR, PHARMACY, HOSPITAL |
+| `INVALID_LICENCE_NUMBER` | 400 | Licence number is not in a recognised format | DOCTOR, PHARMACY, HOSPITAL |
+| `INVALID_STATE` | 400 | `state` is not an ISO 3166-2:IN code such as `TN` | PHARMACY, HOSPITAL |
+| `INVALID_GSTIN` | 400 | GSTIN has the wrong length or pattern, an unknown state code, or a wrong check character | PHARMACY, HOSPITAL |
+| `GSTIN_STATE_MISMATCH` | 400 | GSTIN is well formed but its state code belongs to a different state than `state` | PHARMACY, HOSPITAL |
+| `LICENCE_TAKEN` | 409 | Another account already uses this licence number | DOCTOR, PHARMACY, HOSPITAL |
+| `LICENCE_NAME_MISMATCH` | 400 | Number is in the registry but `name` differs | DOCTOR, PHARMACY, HOSPITAL |
+| `LICENCE_STATE_MISMATCH` | 400 | Number is in the registry but `stateCouncil` (doctor) or `state` (pharmacy, hospital) differs | DOCTOR, PHARMACY, HOSPITAL |
+| `LICENCE_GSTIN_MISMATCH` | 400 | Number is in the registry but `gstin` differs | PHARMACY, HOSPITAL |
 
 A number that is well formed but not in the registry is not an error: it returns 201 with `verificationStatus: "PENDING"` and `verificationReasonCode: "LICENCE_NOT_IN_REGISTRY"`. If the registry could not be seeded (database down at startup), every well-formed number takes that path until it is seeded.
 
@@ -427,7 +482,7 @@ Change: `?adminUsername=` query param is removed; the verifying admin comes from
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE, **NOT BUILT** | `POST /reception/checkin` | ADMIN (front desk, replaces RECEPTION) or DOCTOR | `{careId,hospitalId,doctorId,patientName,age,gender}` (old key `abha`) | Visit `{id,careId,hospitalId,doctorId,status:"WAITING",checkedInAt}`. 409 if already waiting. Not a grant-gated endpoint; the doctor still needs a grant to open the patient's data |
+| CHANGE, **NOT BUILT** | `POST /reception/checkin` | RECEPTION (front desk) or DOCTOR | `{careId,hospitalId,doctorId,patientName,age,gender}` (old key `abha`) | Visit `{id,careId,hospitalId,doctorId,status:"WAITING",checkedInAt}`. 409 if already waiting. Not a grant-gated endpoint; the doctor still needs a grant to open the patient's data |
 | KEEP, **NOT BUILT** | `GET /reception/queue/{hospitalId}?doctorId=` | DOCTOR, ADMIN | none | `Visit[]` (doctorId optional filter) |
 | KEEP, **NOT BUILT** | `DELETE /reception/visit/{id}` | DOCTOR, ADMIN | none | 200. 404 unknown |
 

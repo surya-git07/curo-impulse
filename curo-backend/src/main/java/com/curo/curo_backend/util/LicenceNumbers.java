@@ -20,6 +20,11 @@ public final class LicenceNumbers {
         return normalized != null && DOCTOR.matcher(normalized).matches();
     }
 
+    /** A hospital licence number follows the same plain format rule as a drug licence number. */
+    public static boolean isValidHospitalNumber(String normalized) {
+        return isValidDrugLicenceNumber(normalized);
+    }
+
     public static boolean isValidDrugLicenceNumber(String normalized) {
         return normalized != null && DRUG.matcher(normalized).matches();
     }

@@ -14,6 +14,7 @@ public class LicenceVerificationResult {
     public static final String NAME_MISMATCH = "LICENCE_NAME_MISMATCH";
     public static final String STATE_MISMATCH = "LICENCE_STATE_MISMATCH";
     public static final String GSTIN_MISMATCH = "LICENCE_GSTIN_MISMATCH";
+    public static final String ACCEPTED_DEMO = "LICENCE_ACCEPTED_DEMO";
 
     private VerificationStatus status;
 
@@ -26,6 +27,12 @@ public class LicenceVerificationResult {
     public static LicenceVerificationResult verified() {
         return new LicenceVerificationResult(VerificationStatus.VERIFIED, MATCHED,
                 "Licence number, name and state match the licence registry.");
+    }
+
+    /** demo-accept mode: the format checks passed, nothing was looked up. */
+    public static LicenceVerificationResult verifiedInDemoMode() {
+        return new LicenceVerificationResult(VerificationStatus.VERIFIED, ACCEPTED_DEMO,
+                "Accepted in demo mode: the licence format passed. It was not checked against a registry.");
     }
 
     public static LicenceVerificationResult pending(String code, String message) {
