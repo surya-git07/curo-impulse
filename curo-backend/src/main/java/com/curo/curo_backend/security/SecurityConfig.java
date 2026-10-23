@@ -1,6 +1,7 @@
 package com.curo.curo_backend.security;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -14,6 +15,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -28,13 +30,30 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    // Comma-separated exact origins, from CORS_ALLOWED_ORIGINS (see application.properties). Credentials are allowed,
+    // so a wildcard origin is refused at startup rather than quietly accepted.
+    @Value("${cors.allowed-origins:http://localhost:5173,http://localhost:8081}")
+    private String allowedOrigins;
+
+    static List<String> parseOrigins(String csv) {
+        List<String> origins = Arrays.stream(csv == null ? new String[0] : csv.split(","))
+                .map(String::trim).filter(o -> !o.isEmpty()).toList();
+        for (String origin : origins) {
+            if (origin.contains("*")) {
+                throw new IllegalStateException("CORS_ALLOWED_ORIGINS must list exact origins; wildcards are not allowed with credentials");
+            }
+        }
+        return origins;
+    }
+
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("http://localhost:5173"));
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setAllowedOrigins(parseOrigins(allowedOrigins));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
         configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
