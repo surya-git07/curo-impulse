@@ -12,6 +12,7 @@ import FamilyTab from './FamilyTab';
 import BookTab from './BookTab';
 import QrTab from './QrTab';
 import PrivacyNotice from './PrivacyNotice';
+import ShareRecord from './ShareRecord';
 import {
   MOCK_PATIENT, MOCK_PRESCRIPTIONS, MOCK_TODAY_SCHEDULE,
   MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG,
@@ -282,7 +283,7 @@ function AppInner() {
   const historyVisits = groupByVisit(filtered);
   const takenCount = schedule.filter((d) => d.taken).length;
 
-  const title = { home: 'Curo', today: "Today's Schedule", qr: 'My QR', book: 'Book Appointment', family: 'Family', settings: 'Settings' }[tab];
+  const title = { home: 'Curo', today: "Today's Schedule", qr: 'My QR', book: 'Book Appointment', family: 'Family', settings: 'Settings', share: 'Share My Record' }[tab];
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -394,6 +395,7 @@ function AppInner() {
             <SettingsItem text="✏️  Edit Personal Details" onPress={() => setScreen('profile')} />
             <SettingsItem text="🧾  Prescription History" onPress={() => setTab('history')} />
             <SettingsItem text="👁️  Who Viewed My Record" onPress={() => setTab('accesslog')} />
+            <SettingsItem text="🔗  Share my record" onPress={() => setTab('share')} />
             <SettingsItem text="🔒  Privacy Notice" onPress={() => setOverlay('privacy')} />
             <SettingsItem text="ℹ️  About Curo" onPress={() => Alert.alert('Curo', 'Version 1.0 (demo)')} />
             <TouchableOpacity style={styles.logoutButton} onPress={logout}><Text style={styles.buttonText}>Log Out</Text></TouchableOpacity>
@@ -402,6 +404,9 @@ function AppInner() {
             </TouchableOpacity>
           </>
         )}
+
+        {/* SHARE MY RECORD (reached from Settings) */}
+        {tab === 'share' && <ShareRecord onBack={() => setTab('settings')} onCopied={showToast} />}
 
         {/* HISTORY (reached from Settings) */}
         {tab === 'history' && (
@@ -426,7 +431,10 @@ function AppInner() {
             <Text style={styles.sectionTitle}>Who viewed your record</Text>
             {MOCK_ACCESS_LOG.map((a) => (
               <View key={a.id} style={styles.card}>
-                <Text style={styles.drugName}>{a.who}</Text>
+                <View style={styles.whoRow}>
+                  <Text style={styles.drugName}>{a.who}</Text>
+                  {a.role === 'Guest' ? <View style={styles.guestBadge}><Text style={styles.badgeText}>Guest</Text></View> : null}
+                </View>
                 <Text style={styles.cardValue}>{a.role} · {a.org}</Text>
                 <Text style={styles.cardValueFaint}>{a.action} · {formatVisitDate(a.at)}</Text>
               </View>
@@ -587,6 +595,8 @@ const styles = StyleSheet.create({
 
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   badgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  whoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guestBadge: { backgroundColor: '#6b4fa0', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   badgeAccess: { backgroundColor: '#2e9e5b' },
   badgeWatch: { backgroundColor: '#e08e0b' },
   badgeReserve: { backgroundColor: '#c0392b' },

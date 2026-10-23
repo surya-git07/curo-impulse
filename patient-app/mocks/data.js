@@ -112,6 +112,7 @@ export const MOCK_FAMILY = [
 // One of the brief's must-haves. Shown on a simple access-log screen.
 export const MOCK_ACCESS_LOG = [
   { id: 'a1', who: 'Dr. Mehta', role: 'Doctor', org: 'Kaveri Hospital', action: 'Viewed record', at: '2026-10-23T08:29:00' },
+  { id: 'a4', who: 'Guest (shared link)', role: 'Guest', org: 'Shared link', action: 'Viewed medicines & allergies (code K7Q2MX)', at: '2026-10-22T18:15:00' },
   { id: 'a2', who: 'Kaveri Pharmacy', role: 'Pharmacy', org: 'Kaveri Hospital', action: 'Dispensed Metformin', at: '2026-10-16T12:00:00' },
   { id: 'a3', who: 'Dr. Rao', role: 'Doctor', org: 'City Clinic', action: 'Viewed record', at: '2026-10-16T10:00:00' },
 ];
