@@ -28,9 +28,10 @@ function Login() {
       // Redirect based on role after a short pause
 setTimeout(() => {
   if (role === 'DOCTOR') navigate('/doctor');
-  else if (role === 'ADMIN') navigate('/reception');
   else if (role === 'SUPER_ADMIN') navigate('/config');
   else if (role === 'PHARMACY') navigate('/pharmacy');
+  else if (role === 'HOSPITAL') navigate('/hospital');
+  else if (role === 'RECEPTION') navigate('/reception');
 }, 1200);
     } catch (err) {
       setError(errorMessage(err, 'Sign in failed.'));

@@ -27,6 +27,21 @@ export const errorMessage = (err, fallback) => {
   return d?.message || fallback;
 };
 
+// Signup failures: a clear message for the codes users can fix, otherwise whatever the API said (or the fallback).
+const SIGNUP_MESSAGES = {
+  INVALID_LICENCE_NUMBER: 'Licence number format is invalid (example: TN-61907)',
+  GSTIN_STATE_MISMATCH: 'Check the GSTIN and state',
+  INVALID_GSTIN: 'Check the GSTIN and state',
+  LICENCE_GSTIN_MISMATCH: "Licence and GSTIN don't match",
+};
+
+export const signupErrorMessage = (err, fallback) => {
+  const mapped = SIGNUP_MESSAGES[err?.response?.data?.error];
+  if (mapped) return mapped;
+  if (err?.response?.status === 409) return 'This phone or licence is already registered';
+  return errorMessage(err, fallback);
+};
+
 export const login = async (identifier, password) => {
   const { data } = await axios.post(`${API}/auth/login`, { identifier, password });
   const { token, user } = data;

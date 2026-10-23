@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { login, signup, errorMessage, PHONE_RE, PHONE_PATTERN, PHONE_MESSAGE, phoneDigits, LOGIN_ID_PATTERN, loginIdentifier, loginIdentifierError } from '../api';
+import { login, signup, errorMessage, signupErrorMessage, PHONE_RE, PHONE_PATTERN, PHONE_MESSAGE, phoneDigits, LOGIN_ID_PATTERN, loginIdentifier, loginIdentifierError } from '../api';
 import { Spinner, StatusBadge } from './ui';
 import './Login.css';
 
@@ -27,8 +27,16 @@ const typeDescriptions = {
 
 const pathwaySteps = ['Reception', 'Doctor', 'Pharmacy', 'Patient'];
 
-// Pharmacy pages sign up pharmacies; hospital and clinic pages sign up doctors.
-const staffRole = (type) => (type === 'pharmacy' ? 'PHARMACY' : 'DOCTOR');
+// The page only picks the starting choice in the Sign Up dropdown: the pharmacy page starts on Pharmacy,
+// the clinic and hospital pages on Doctor.
+const defaultRole = (type) => (type === 'pharmacy' ? 'PHARMACY' : 'DOCTOR');
+
+const SIGNUP_ROLES = [
+  { value: 'RECEPTION', label: 'Reception' },
+  { value: 'DOCTOR', label: 'Doctor' },
+  { value: 'PHARMACY', label: 'Pharmacy' },
+  { value: 'HOSPITAL', label: 'Hospital' },
+];
 
 const emptyStaff = () => ({
   name: '', phone: '', password: '',
@@ -40,7 +48,7 @@ function Entry() {
   const { facilityType } = useParams();
   const navigate = useNavigate();
   const [mode, setMode] = useState('login');
-  const role = staffRole(facilityType);
+  const [role, setRole] = useState(defaultRole(facilityType));
   const hospitalType = facilityType === 'private' || facilityType === 'government';
 
   const [identifier, setIdentifier] = useState('');
@@ -68,9 +76,10 @@ function Entry() {
       const { role } = await login(identifier, password);
 
       if (role === 'DOCTOR') navigate('/doctor');
-      else if (role === 'ADMIN') navigate('/reception');
+      else if (role === 'RECEPTION') navigate('/reception');
       else if (role === 'SUPER_ADMIN') navigate('/config');
       else if (role === 'PHARMACY') navigate('/pharmacy');
+      else if (role === 'HOSPITAL') navigate('/hospital');
       else navigate('/');
     } catch (err) {
       setLoginError(errorMessage(err, 'Sign in failed.'));
@@ -100,8 +109,12 @@ function Entry() {
     if (role === 'DOCTOR') {
       fields.licenceNumber = f.licenceNumber.trim();
       fields.stateCouncil = f.stateCouncil.trim();
-    } else {
+    } else if (role === 'PHARMACY') {
       fields.drugLicenceNumber = f.drugLicenceNumber.trim();
+      fields.gstin = f.gstin.trim().toUpperCase();
+      fields.state = f.state.trim().toUpperCase();
+    } else if (role === 'HOSPITAL') {
+      fields.licenceNumber = f.licenceNumber.trim();
       fields.gstin = f.gstin.trim().toUpperCase();
       fields.state = f.state.trim().toUpperCase();
     }
@@ -114,7 +127,7 @@ function Entry() {
       setPhoneTouched(false);
       setConsent(false);
     } catch (err) {
-      setStaffErr(errorMessage(err, 'Sign up failed. Check the details and try again.'));
+      setStaffErr(signupErrorMessage(err, 'Sign up failed. Check the details and try again.'));
     } finally {
       setStaffBusy(false);
     }
@@ -181,8 +194,14 @@ function Entry() {
 
           {mode === 'registerStaff' && (
             <form onSubmit={handleRegisterStaff} className="entry-form" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <label className="mt-label" htmlFor="signup-role" style={{ marginBottom: '-0.5rem' }}>Sign up as</label>
+              <select id="signup-role" className="plain" value={role}
+                onChange={(e) => { setRole(e.target.value); setStaffErr(''); setSignupResult(null); }}>
+                {SIGNUP_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
               <input className="plain"
-                placeholder={role === 'PHARMACY' ? 'Licensee name, as on the drug licence' : 'Full name'}
+                placeholder={role === 'PHARMACY' ? 'Licensee name, as on the drug licence'
+                  : role === 'HOSPITAL' ? 'Hospital name, as on the licence' : 'Full name'}
                 value={staffForm.name} onChange={(e) => setStaff({ name: e.target.value })} required />
               <input className="plain" type="tel" inputMode="numeric" autoComplete="tel-national"
                 placeholder="Mobile number (10 digits)" value={staffForm.phone}
@@ -198,9 +217,9 @@ function Entry() {
 
               {role === 'DOCTOR' && (
                 <>
-                  <input className="plain" placeholder="Licence number, e.g. TN-48213" value={staffForm.licenceNumber}
+                  <input className="plain" placeholder="Licence number" value={staffForm.licenceNumber}
                     onChange={(e) => setStaff({ licenceNumber: e.target.value })} required />
-                  <input className="plain" placeholder="State medical council, e.g. Tamil Nadu Medical Council" value={staffForm.stateCouncil}
+                  <input className="plain" placeholder="State medical council" value={staffForm.stateCouncil}
                     onChange={(e) => setStaff({ stateCouncil: e.target.value })} required />
                 </>
               )}
@@ -209,10 +228,21 @@ function Entry() {
                 <>
                   <input className="plain" placeholder="Drug licence number" value={staffForm.drugLicenceNumber}
                     onChange={(e) => setStaff({ drugLicenceNumber: e.target.value })} required />
-                  <input className="plain" placeholder="GSTIN, e.g. 33AAAAA0000A1Z5" value={staffForm.gstin}
+                  <input className="plain" placeholder="GSTIN" value={staffForm.gstin}
                     onChange={(e) => setStaff({ gstin: e.target.value })} required />
-                  <input className="plain" placeholder="State code, e.g. TN" maxLength={2} value={staffForm.state}
+                  <input className="plain" placeholder="State (2-letter code, e.g. TN)" maxLength={2} value={staffForm.state}
                     onChange={(e) => setStaff({ state: e.target.value })} required />
+                </>
+              )}
+
+              {role === 'HOSPITAL' && (
+                <>
+                  <input className="plain" placeholder="Licence number" value={staffForm.licenceNumber}
+                    onChange={(e) => setStaff({ licenceNumber: e.target.value })} required />
+                  <input className="plain" placeholder="State (2-letter code, e.g. KL)" maxLength={2} value={staffForm.state}
+                    onChange={(e) => setStaff({ state: e.target.value })} required />
+                  <input className="plain" placeholder="GSTIN" value={staffForm.gstin}
+                    onChange={(e) => setStaff({ gstin: e.target.value })} required />
                 </>
               )}
 
@@ -222,18 +252,32 @@ function Entry() {
               </label>
 
               {staffErr && <p className="error" role="alert">{staffErr}</p>}
-              {signupResult && (
-                <div className={`alert-box ${signupResult.verificationStatus === 'VERIFIED' ? 'alert-green' : 'alert-orange'}`} role="status">
+              {signupResult && !signupResult.verificationStatus && (
+                <div className="alert-box alert-green" role="status">
+                  Account created. Your CareID is <strong>{signupResult.careId}</strong>.
+                </div>
+              )}
+              {signupResult && signupResult.verificationStatus === 'VERIFIED' && (
+                <div className="alert-box alert-green" role="status">
+                  <div><strong>Licence status: Verified.</strong> Your licence has been approved.</div>
+                  <div style={{ marginTop: 6 }}>
+                    Your CareID is <strong>{signupResult.careId}</strong>. You can sign in now.
+                  </div>
+                  <button type="button" className="btn" style={{ marginTop: 10 }}
+                    onClick={() => { setSignupResult(null); setMode('login'); }}>
+                    Go to Sign In
+                  </button>
+                </div>
+              )}
+              {signupResult && signupResult.verificationStatus && signupResult.verificationStatus !== 'VERIFIED' && (
+                <div className="alert-box alert-orange" role="status">
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                     <strong>Licence status</strong>
-                    <StatusBadge status={signupResult.verificationStatus || 'PENDING'} />
+                    <StatusBadge status={signupResult.verificationStatus} />
                   </div>
-                  <div>{signupResult.verificationReason
-                    || (signupResult.verificationStatus === 'VERIFIED' ? 'Your licence matched the registry.' : 'A reviewer will check your licence.')}</div>
+                  <div>{signupResult.verificationReason || 'A reviewer will check your licence.'}</div>
                   <div style={{ marginTop: 6 }}>
-                    {signupResult.verificationStatus === 'VERIFIED'
-                      ? <>Your CareID is <strong>{signupResult.careId}</strong>. You can sign in now with it or your phone.</>
-                      : <>Your CareID is <strong>{signupResult.careId}</strong>. You can sign in once a reviewer approves the account.</>}
+                    Your CareID is <strong>{signupResult.careId}</strong>. You can sign in once a reviewer approves the account.
                   </div>
                 </div>
               )}
