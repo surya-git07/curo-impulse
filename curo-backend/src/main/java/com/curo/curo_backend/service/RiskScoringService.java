@@ -1,10 +1,10 @@
 package com.curo.curo_backend.service;
 
 import org.springframework.context.annotation.Profile;
-import com.curo.curo_backend.model.DrugMaster;
-import com.curo.curo_backend.model.Prescription;
-import com.curo.curo_backend.repository.DrugMasterRepository;
-import com.curo.curo_backend.repository.PrescriptionRepository;
+import com.curo.curo_backend.model.legacy.DrugMaster;
+import com.curo.curo_backend.model.legacy.Prescription;
+import com.curo.curo_backend.repository.legacy.DrugMasterRepository;
+import com.curo.curo_backend.repository.legacy.PrescriptionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 

@@ -6,6 +6,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.List;
 
 @Data
 @Document("users")
@@ -51,6 +52,9 @@ public class AppUser {
     private String facilityId;
 
     private String facilityName;
+
+    // patient's recorded allergies, as free text ("Penicillin", "NSAIDs"); used by the allergy check
+    private List<String> allergies;
 
     private boolean profileCompleted = false;
 

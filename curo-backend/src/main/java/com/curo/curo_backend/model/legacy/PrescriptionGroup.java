@@ -1,4 +1,4 @@
-package com.curo.curo_backend.model;
+package com.curo.curo_backend.model.legacy;
 
 import lombok.Data;
 

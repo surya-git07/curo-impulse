@@ -1,6 +1,7 @@
-package com.curo.curo_backend.repository;
+package com.curo.curo_backend.repository.legacy;
 
-import com.curo.curo_backend.model.PrescriptionGroup;
+import com.curo.curo_backend.repository.LegacyRepository;
+import com.curo.curo_backend.model.legacy.PrescriptionGroup;
 
 import java.util.List;
 import java.util.Optional;

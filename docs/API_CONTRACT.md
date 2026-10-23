@@ -316,7 +316,7 @@ Request/response keep old shapes with `patientAbha` renamed `careId`. All patien
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE | `POST /prescription/issue` | DOCTOR | `{careId,doctorId,hospitalId,drugs:[{drug,dose,duration,frequency?,durationDays?,times?}]}` (new optional dose-schedule fields, section 8) | `{groupId,qrCode,drugs:[Prescription],warnings:[{drug,severity,warning,explanation}]}`. 400 no drugs. **Never blocks on an interaction or allergy:** the old 409 on drug conflict is removed; findings come back in `warnings` (section 9). Old code also pushed each drug to the external patient service (now internal) |
+| CHANGE | `POST /prescription/issue` | DOCTOR | `{careId,drugs:[{drug,dose,duration?,durationDays?,frequency?,times?}]}`. `doctorId` and `hospitalId` may be sent but are ignored: the doctor is the signed-in user | `201 {drugs:[Prescription],warnings:[{drug,severity,warning,explanation}]}`. `groupId` and `qrCode` return when the pharmacy side is ported. 400 `DRUGS_REQUIRED` (1 to 20 drugs), `DRUG_REQUIRED`, `DOSE_REQUIRED`, `INVALID_FREQUENCY`, `INVALID_SCHEDULE`, `INVALID_DURATION`; 403 `CONSENT_WITHDRAWN` if the patient withdrew policy consent. **Never blocks on an interaction or allergy:** the old 409 on drug conflict is removed; every finding comes back in `warnings` and the prescription is saved regardless (section 9). Each drug is checked against the patient's current drugs and the drugs earlier in the same request. Request problems (400) are reported before any grant check |
 | KEEP | `GET /prescription/by-qr/{qrCode}` | PHARMACY, ADMIN | none | `{groupId,careId,status,issuedAt,drugs}`. 404 invalid; 409 already dispensed; 409 recalled. See QR exception in section 3 |
 | KEEP | `GET /prescription/group/{groupId}` | DOCTOR, PHARMACY, ADMIN | none | `{groupId,careId,status,issuedAt,drugs}`. 404 |
 | DROP | `POST /prescription/group/{groupId}/dispense` | | | superseded by `dispense-full`; not called by any client |
@@ -329,8 +329,8 @@ Request/response keep old shapes with `patientAbha` renamed `careId`. All patien
 | CHANGE | `GET /prescription/for-patient/{careId}/active` | DOCTOR, PHARMACY, ADMIN | none | `[{groupId,careId,status,issuedAt,drugs}]` |
 | CHANGE | `GET /prescription/active-conflicts/{careId}` | DOCTOR | none | `[{drug,drugClass,doctorId,issuedAt,dose}]` |
 | CHANGE | `DELETE /prescription/{id}` | DOCTOR, ADMIN | none | 200. 404. **409 `HAS_HISTORY` once the item has been dispensed or modified**; use discontinue instead. (ADMIN gets 403 `NO_ACTIVE_GRANT` in practice, see section 3) |
-| NEW | `PUT /prescription/{id}` | DOCTOR (the issuing doctor) | `{dose?, duration?, durationDays?, frequency?, times?, reason}` (at least one change; `reason` required) | Prescription with the new version appended. 404; 403 not the issuing doctor; 409 `INVALID_STATE` if discontinued or recalled. If already dispensed, future doses in the schedule are regenerated from the new version (section 8) and a `PRESCRIPTION_CHANGED` alert goes to the patient |
-| NEW | `POST /prescription/{id}/discontinue` | DOCTOR (the issuing doctor) | `{reason}` | Prescription with `status:"DISCONTINUED"` and a final version appended. 409 `INVALID_STATE` if already discontinued. Pending future doses are cancelled; past dose records stay. `PRESCRIPTION_CHANGED` alert to patient |
+| NEW | `PUT /prescription/{id}` | DOCTOR (the issuing doctor) | `{dose?, duration?, durationDays?, frequency?, times?, reason}` (at least one change; `reason` required) | Prescription with the new version appended. 404 `PRESCRIPTION_NOT_FOUND`; 403 `FORBIDDEN` if not the issuing doctor; 409 `INVALID_STATE` if discontinued (or recalled, later); 400 `REASON_REQUIRED`, 400 `NO_CHANGE` if nothing differs; 409 `CONCURRENT_MODIFICATION` if two doctors change it at once. If already dispensed, future doses in the schedule are regenerated from the new version (section 8) and a `PRESCRIPTION_CHANGED` alert goes to the patient |
+| NEW | `POST /prescription/{id}/discontinue` | DOCTOR (the issuing doctor) | `{reason}` | Prescription with `status:"DISCONTINUED"` and a final version appended. 404 `PRESCRIPTION_NOT_FOUND`; 403 `FORBIDDEN` if not the issuing doctor; 400 `REASON_REQUIRED`; 409 `INVALID_STATE` if already discontinued. Pending future doses are cancelled; past dose records stay. `PRESCRIPTION_CHANGED` alert to patient |
 | NEW | `GET /prescription/{id}/history` | DOCTOR, PHARMACY | none | `{prescriptionId,careId,drug,currentVersion,versions:[...]}` (version object below) |
 
 **Version object** (append-only, never edited or deleted):
@@ -355,6 +355,14 @@ Request/response keep old shapes with `patientAbha` renamed `careId`. All patien
 - PrescriptionGroup: `{id,careId,doctorId,hospitalId,pharmacyId,qrCode,status,issuedAt,extendedDays,extensionNote}`.
 - Dropped field: `externalPrescriptionId` (existed only to link to the old external patient service).
 - New optional drug fields: `frequency` (`ONCE_DAILY`, `TWICE_DAILY`, `THREE_TIMES_DAILY`, `FOUR_TIMES_DAILY`), `times` (`["HH:mm"]` in the patient's local time, overrides the default times for that frequency), `durationDays` (integer). The old free-text `duration` is still accepted and parsed ("7 days"); if it cannot be parsed and `durationDays` is absent, no dose schedule is generated for that drug.
+
+**As built (Mongo `prescriptions` collection):**
+- `status` is `ACTIVE` or `DISCONTINUED` for now. `RECALLED`, `ISSUED` and `DISPENSED` arrive with the pharmacy side, and so do `prescriptionGroupId`, `groupId` and `qrCode`.
+- Every prescription stores `versions[]`; the top-level fields always equal the latest version. A version records the change type, the values, `reason`, who (`changedBy` user id, name and role) and when (`changedAt`, set by the server).
+- Frequency defaults when `times` is not sent: `ONCE_DAILY` 08:00; `TWICE_DAILY` 08:00 and 20:00; `THREE_TIMES_DAILY` 08:00, 14:00, 20:00; `FOUR_TIMES_DAILY` 06:00, 12:00, 18:00, 22:00. `times` needs a `frequency` and exactly as many different `HH:mm` values as the frequency has doses.
+- `duration` text is read as `N day(s)`, `N week(s)` or `Nd`/`Nw` (1 to 365 days). Anything else is kept as written and gives no end date. An explicit `durationDays` always wins.
+- A course is **current** until the end of its last day, counted in Indian time (`Asia/Kolkata`): a 7-day course issued on the 23rd is current through the 29th. A prescription with no duration stays current until discontinued. Only current prescriptions feed the interaction check and the medication profile.
+- Prescriptions are looked up by id; a doctor with no grant who guesses an id gets `403 NO_ACTIVE_GRANT`, never the record.
 
 ## 8. Medication profile, dose schedule, dose log
 
@@ -394,7 +402,7 @@ Self-view uses `/patient/me/...` (no grant). The same data for others uses `/pat
   "allergies": ["Penicillin"]
 }
 ```
-Only active (dispensed, not discontinued, not past `endDate`) medications are listed.
+Only current medications are listed: not discontinued and not past their last day (dispensing is not tracked yet, so a course starts on its issue date). `startDate` is the issue date in Indian time; `endDate` is the last day, inclusive, and is absent when no duration was given. `allergies` is shown to the patient themself, and to a clinician or caregiver only if the grant also covers `PROFILE`; otherwise the field is left out. Reading it is logged as a `READ` of `MEDICATIONS`.
 
 **Dose**
 ```json
@@ -499,7 +507,7 @@ A caregiver link is a request to hold a standing `CAREGIVER` AccessGrant on one 
 | KEEP | `GET /pharmacy/prescription/{id}` | PHARMACY, ADMIN | none | Prescription. 404. Grant-gated |
 | KEEP | `POST /pharmacy/dispense` | PHARMACY, ADMIN | `{prescriptionId,pharmacyId,drug,quantity}` | DispensingLog `{id,prescriptionId,pharmacyId,qtyDispensed,dispensedAt,status,drugName,careId,rejectReason}`. 404 not stocked; 409 insufficient stock. Grant-gated |
 | KEEP | `GET /pharmacy/log/{pharmacyId}` | PHARMACY, ADMIN | none | `{dispensedCount,rejectedCount,pendingCount,entries:[{id,qtyDispensed,dispensedAt,status,rejectReason,drug,careId}]}` |
-| KEEP | `GET /drugs/list` | DOCTOR, ADMIN, PHARMACY | none | `[{id,name,drugClass,scheduleType}]` |
+| KEEP | `GET /drugs/list` | DOCTOR, ADMIN, PHARMACY | none | `[{id,name,drugClass,scheduleType}]` sorted by name. Backed by the Mongo `drug_master` collection (48 generic drugs seeded on startup). `scheduleType` is `RX` or `OTC` and indicative only. Reference data, so no grant is involved |
 | NEW | `GET /pharmacies/nearby?lat=&lng=&drug=&radiusKm=&limit=` | any authenticated role | query only. `lat` (-90 to 90) and `lng` (-180 to 180) required; `drug` optional; `radiusKm` default 5, max 50; `limit` default 20, max 50 | `[{id,name,address,state,location:{lat,lng},distanceKm,inStock}]` nearest first. 400 `INVALID_COORDINATES` |
 
 Nearby rules: only `VERIFIED` pharmacy facilities with a stored location are returned. `drug` matches stock by name, case-insensitive. When `drug` is given, `inStock` is `true` and only facilities with quantity above zero are returned; when absent, `inStock` is `null`. Quantities are never exposed. Facilities need a 2dsphere index on `location`; the index and the coordinates (from signup, `pharmacy-facility/register`, or AWS Location Service geocoding of `address`) are the backend's job.
@@ -511,7 +519,7 @@ Nearby rules: only `VERIFIED` pharmacy facilities with a stored location are ret
 | CHANGE | `GET /patient/{careId}/summary` | DOCTOR, PHARMACY (old: public). Grant-gated (`PROFILE`) | none | `{careId,name,allergies,conditions}`. Old fallback `{offline:true}` removed; use 503 |
 | CHANGE | `GET /patient/{careId}/history` | DOCTOR (old: public). Grant-gated (`PRESCRIPTIONS`) | none | `[{drug,dose,duration,issuedAt,status,drugClass,riskFlag}]` |
 | KEEP | `GET /patient/me` | PATIENT | none | `{id,careId,name,phone,allergies,profileCompleted,...}` |
-| KEEP | `PUT /patient/me` | PATIENT | `{name,allergies,conditions,dob,bloodGroup}` | updated profile. (Old app called this to complete profile; exact body inferred) |
+| KEEP | `PUT /patient/me` | PATIENT | `{name,allergies,conditions,dob,bloodGroup}` | updated profile. **As built: only `allergies` can be changed** (trimmed, blanks and repeats dropped, at most 30 entries of 60 characters each); the other fields are not stored yet and are ignored |
 | CHANGE | `DELETE /patient/me` | PATIENT | none | **204, soft delete.** See below |
 | KEEP | `POST /patient/me/push-token` | PATIENT | `{pushToken}` (old: query param) | 204 |
 | KEEP | `GET /patient/me/prescriptions/detailed` | PATIENT | none | `[{id,drugName,dosage,durationDays,status,hospitalName,doctorName,createdAt,dispensedAt,visitId,awareCategory,isAntibiotic,allergyConflict,notRecommended,currentVersion}]` |
@@ -572,3 +580,7 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 13. **Pharmacy `name` is the licensee name on the drug licence**, since `name` is now the only name field. There is no separate pharmacist name in the MVP. Confirm.
 14. **Deferred in code:** `facilityId`, `address`, `lat` and `lng` on signup are in this contract but are not stored or validated until hospitals and pharmacy facilities are ported off the legacy JPA models.
 15. **Pending requests never expire** and nothing yet notifies the patient of a new request (alerts are not built). Add an expiry and the `GRANT_REQUEST` alert?
+16. **The drug and interaction tables need clinical review.** The 48 drugs, 32 interaction pairs and 4 allergy cross-reactions are a hardcoded starter set (`DrugSeed`, `InteractionTable`, `AllergyTable`). A pharmacist or doctor should check the severities and wording before this is used with real patients.
+17. **A doctor with only a `PRESCRIPTIONS` grant still sees allergy warnings** when issuing, because an allergy conflict is safety-critical. The allergy list itself (`PROFILE` scope) is not shown to them.
+18. **`POST /checks/interaction` is not built yet.** The check runs on issue only; the standalone endpoint, the dose schedule, QR/group dispensing and the `PRESCRIPTION_CHANGED` alert come later. `/ai/risk-score` and the old `/prescription/*` pharmacy endpoints remain in the disabled legacy code under `/legacy/prescription`.
+19. **Patient profile:** only allergies are stored. Name changes, conditions, date of birth and blood group (and so `ageYears` and `gender` on `/careid`) are still to do.

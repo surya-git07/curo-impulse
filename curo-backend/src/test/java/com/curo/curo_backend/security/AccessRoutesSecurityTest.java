@@ -29,6 +29,7 @@ class AccessRoutesSecurityTest {
         registry.add("spring.mongodb.uri", () -> "mongodb://localhost:27017/curo-test");
         registry.add("spring.data.mongodb.auto-index-creation", () -> "false");
         registry.add("licence.verification.seed-on-startup", () -> "false");
+        registry.add("drugs.seed-on-startup", () -> "false");
     }
 
     @Autowired
@@ -67,6 +68,52 @@ class AccessRoutesSecurityTest {
         for (String role : new String[]{"DOCTOR", "PHARMACY", "CAREGIVER", "ADMIN", "SUPER_ADMIN"}) {
             assertThat(statusOf(as(role, get("/patient/me/access-log")))).as(role).isEqualTo(403);
             assertThat(statusOf(as(role, post("/patient/me/share-codes").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void noTokenMeansNoAccessToThePrescriptionRoutes() throws Exception {
+        assertThat(statusOf(post("/prescription/issue").contentType("application/json").content("{}"))).isIn(401, 403);
+        assertThat(statusOf(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/prescription/rx1").contentType("application/json").content("{}"))).isIn(401, 403);
+        assertThat(statusOf(post("/prescription/rx1/discontinue"))).isIn(401, 403);
+        assertThat(statusOf(get("/prescription/rx1/history"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/CID-7K3MQ9/medications"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/me/medications"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/me"))).isIn(401, 403);
+        assertThat(statusOf(get("/drugs/list"))).isIn(401, 403);
+    }
+
+    @Test
+    void onlyDoctorsReachTheWriteRoutes() throws Exception {
+        for (String role : new String[]{"PATIENT", "PHARMACY", "CAREGIVER"}) {
+            assertThat(statusOf(as(role, post("/prescription/issue").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/prescription/rx1").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, post("/prescription/rx1/discontinue")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void historyIsForDoctorsAndPharmaciesOnly() throws Exception {
+        for (String role : new String[]{"PATIENT", "CAREGIVER", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, get("/prescription/rx1/history")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void medicationRoutesKeepPatientsAndCliniciansApart() throws Exception {
+        for (String role : new String[]{"PATIENT", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, get("/patient/CID-7K3MQ9/medications")))).as(role).isEqualTo(403);
+        }
+        for (String role : new String[]{"DOCTOR", "PHARMACY", "CAREGIVER", "ADMIN"}) {
+            assertThat(statusOf(as(role, get("/patient/me/medications")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, get("/patient/me")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void theDrugListIsNotForPatients() throws Exception {
+        for (String role : new String[]{"PATIENT", "CAREGIVER"}) {
+            assertThat(statusOf(as(role, get("/drugs/list")))).as(role).isEqualTo(403);
         }
     }
 

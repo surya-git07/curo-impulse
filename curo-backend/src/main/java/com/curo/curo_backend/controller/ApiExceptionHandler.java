@@ -4,6 +4,7 @@ import com.curo.curo_backend.dto.ApiError;
 import com.curo.curo_backend.service.ApiException;
 import com.curo.curo_backend.service.GrantExistsException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -18,6 +19,12 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiError> handleApi(ApiException e) {
         String grantId = e instanceof GrantExistsException g ? g.getGrantId() : null;
         return ResponseEntity.status(e.getStatus()).body(new ApiError(e.getCode(), e.getMessage(), grantId));
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> handleConflict(OptimisticLockingFailureException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ApiError("CONCURRENT_MODIFICATION", "Someone else changed this at the same time. Reload and try again."));
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)

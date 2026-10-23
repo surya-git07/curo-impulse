@@ -1,15 +1,15 @@
 package com.curo.curo_backend.controller;
 
-import org.springframework.context.annotation.Profile;
-import com.curo.curo_backend.model.DrugMaster;
+import com.curo.curo_backend.dto.DrugView;
 import com.curo.curo_backend.repository.DrugMasterRepository;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Sort;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-@Profile("legacy-jpa")
 @RestController
 @RequestMapping("/drugs")
 public class DrugController {
@@ -17,8 +17,11 @@ public class DrugController {
     @Autowired
     private DrugMasterRepository drugMasterRepository;
 
+    // Reference data, not patient data, so no AccessGrant is involved
     @GetMapping("/list")
-    public ResponseEntity<List<DrugMaster>> list() {
-        return ResponseEntity.ok(drugMasterRepository.findAll());
+    public List<DrugView> list() {
+        return drugMasterRepository.findAll(Sort.by("name")).stream()
+                .map(d -> new DrugView(d.getId(), d.getName(), d.getDrugClass(), d.getScheduleType()))
+                .toList();
     }
 }
