@@ -1,9 +1,9 @@
 package com.curo.curo_backend.repository;
 
+import com.curo.curo_backend.model.DispenseStatus;
 import com.curo.curo_backend.model.DispensingLog;
+import org.springframework.data.mongodb.repository.MongoRepository;
 
-import java.util.List;
-
-public interface DispensingLogRepository extends LegacyRepository<DispensingLog, Integer> {
-    List<DispensingLog> findByPharmacyIdOrderByDispensedAtDesc(Integer pharmacyId);
+public interface DispensingLogRepository extends MongoRepository<DispensingLog, String> {
+    boolean existsByPrescriptionIdAndStatus(String prescriptionId, DispenseStatus status);
 }

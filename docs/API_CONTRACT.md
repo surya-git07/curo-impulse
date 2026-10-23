@@ -266,6 +266,7 @@ Behaviour of the log and the guard:
 |---|---|
 | `GET /careid/{careId}`, `GET /patient/{careId}/summary` | `PROFILE` |
 | `GET /patient/{careId}/history`, `GET /prescription/patient/{careId}`, `GET /prescription/for-patient/{careId}/active`, `GET /prescription/active-conflicts/{careId}` | `PRESCRIPTIONS` |
+| `POST /pharmacy/dispense` | `PRESCRIPTIONS` (a PHARMACY grant) |
 | `POST /prescription/issue`, `PUT /prescription/{id}`, `POST /prescription/{id}/discontinue`, `GET /prescription/{id}/history`, `GET /prescription/group/{groupId}`, group `recall`, `extend`, `dispense-full`, `DELETE /prescription/{id}`, `GET /pharmacy/prescription/{id}`, `POST /pharmacy/dispense` | `PRESCRIPTIONS` (writes need a `CLINICAL` or `PHARMACY` grant as fitting) |
 | `GET /patient/{careId}/medications`, `GET /patient/{careId}/dose-schedule` | `MEDICATIONS` |
 | `GET /patient/{careId}/dose-log`, `GET /patient/{careId}/adherence`, `POST /doses/{id}/taken` (as caregiver) | `DOSES` |
@@ -612,14 +613,17 @@ A caregiver link is a request to hold a standing `CAREGIVER` AccessGrant on one 
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| KEEP | `GET /pharmacy/stock/{pharmacyId}` | PHARMACY, ADMIN | none | `[{id,pharmacyId,drug,quantity}]` |
+| CHANGE | `GET /pharmacy/stock/{pharmacyId}` | PHARMACY (own pharmacy only; another id is 403 `FORBIDDEN`) | none | `[{id,pharmacyId,drug,quantity,updatedAt}]` sorted by drug. Backed by the Mongo `pharmacy_stock` collection, one row per pharmacy and drug |
+| NEW | `PUT /pharmacy/stock/{pharmacyId}` | PHARMACY (own pharmacy only) | `{drug, quantity}`: sets the quantity on hand (0 to 100000), creating the drug if new. An alias is stored under the canonical name (`acetaminophen` is `Paracetamol`) | the stock row. 400 `DRUG_REQUIRED`, 400 `INVALID_QUANTITY` |
 | KEEP | `GET /pharmacy/prescription/{id}` | PHARMACY, ADMIN | none | Prescription. 404. Grant-gated |
-| KEEP | `POST /pharmacy/dispense` | PHARMACY, ADMIN | `{prescriptionId,pharmacyId,drug,quantity}` | DispensingLog `{id,prescriptionId,pharmacyId,qtyDispensed,dispensedAt,status,drugName,careId,rejectReason}`. 404 not stocked; 409 insufficient stock. Grant-gated |
+| CHANGE | `POST /pharmacy/dispense` | PHARMACY (own pharmacy; `pharmacyId` in the body is ignored) | `{prescriptionId, drug?, quantity}`: `drug`, if sent, must be the prescription's drug (400 `DRUG_MISMATCH`); `quantity` 1 to 10000 | `{id,prescriptionId,pharmacyId,qtyDispensed,dispensedAt,status:"DISPENSED",drugName,careId}`. **Grant-gated** (`PRESCRIPTIONS`, written to the audit log as a `WRITE` of `DISPENSE`): 403 `NO_ACTIVE_GRANT`. 404 `PRESCRIPTION_NOT_FOUND`; 404 `NOT_STOCKED` if the pharmacy never stocked the drug; **409 `INSUFFICIENT_STOCK`** (nothing changes); 409 `ALREADY_DISPENSED` (one dispense per prescription); 409 `INVALID_STATE` if discontinued or its course has ended. The stock check and subtraction are one atomic step, so two simultaneous dispenses cannot both take the last unit. A refused attempt is kept as a `REJECTED` record with its reason. 403 `NO_PHARMACY` / `PHARMACY_NOT_VERIFIED` for an account with no verified pharmacy |
 | KEEP | `GET /pharmacy/log/{pharmacyId}` | PHARMACY, ADMIN | none | `{dispensedCount,rejectedCount,pendingCount,entries:[{id,qtyDispensed,dispensedAt,status,rejectReason,drug,careId}]}` |
 | KEEP | `GET /drugs/list` | DOCTOR, ADMIN, PHARMACY | none | `[{id,name,drugClass,scheduleType}]` sorted by name. Backed by the Mongo `drug_master` collection (48 generic drugs seeded on startup). `scheduleType` is `RX` or `OTC` and indicative only. Reference data, so no grant is involved |
 | NEW | `GET /pharmacies/nearby?lat=&lng=&drug=&radiusKm=&limit=` | any authenticated role | query only. `lat` (-90 to 90) and `lng` (-180 to 180) required; `drug` optional; `radiusKm` default 5, max 50; `limit` default 20, max 50 | `[{id,name,address,state,location:{lat,lng},distanceKm,inStock}]` nearest first. 400 `INVALID_COORDINATES` |
 
-Nearby rules: only `VERIFIED` pharmacy facilities with a stored location are returned. `drug` matches stock by name, case-insensitive. When `drug` is given, `inStock` is `true` and only facilities with quantity above zero are returned; when absent, `inStock` is `null`. Quantities are never exposed. Facilities need a 2dsphere index on `location`; the index and the coordinates (from signup, `pharmacy-facility/register`, or AWS Location Service geocoding of `address`) are the backend's job.
+Nearby rules (as built): only pharmacies that are `verified` and have a location are returned, nearest first (equal distances in name order). `drug` is matched against stock by name or alias, ignoring case; when given, only pharmacies holding at least one unit are returned and `inStock` is `true`; when absent, every pharmacy in range is returned and `inStock` is `null`. Quantities are never exposed. `distanceKm` is straight-line (haversine) distance, rounded to 2 decimals, so it is a lower bound on the road distance. It sits behind a `DistanceService` interface so Amazon Location Service can replace it. A pharmacy's coordinates come from signup (`lat`/`lng`); geocoding an address with Location Service is not built yet, so a pharmacy that gave no coordinates is not listed. 400 `INVALID_COORDINATES` for a missing or out-of-range `lat`/`lng`, 400 `VALIDATION_ERROR` for a bad `radiusKm` or `limit`.
+
+**Pharmacy records:** signing up as a PHARMACY now also creates its pharmacy record (name, address, state, coordinates) and returns it as `facilityId`; the account's stock and dispensing act on that pharmacy. It is listed in the finder only once its licence is `VERIFIED`. A PENDING pharmacy is switched on by the SUPER_ADMIN approval step, which is not built yet. Five invented demo pharmacies in Bengaluru (neighbourhood centres, not real shop addresses) with stock are seeded on startup for development; they have no accounts.
 
 ## 12. Summary and patient app
 
@@ -696,3 +700,8 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 20. **Reminders and the `MISSED_DOSE` alert are not built.** The scheduler endpoint marks doses missed but tells no one. Caregiver marking of doses, the grant-gated clinician view of a patient's doses, and the adherence report also wait for alerts and caregiver links.
 21. **Rolling 30-day horizon for open-ended prescriptions** is never topped up. A prescription with no end date runs out of doses after 30 days unless it is modified. A nightly top-up in the scheduler tick would fix it.
 22. **Doses start at the issue date**, not the dispense date, because dispensing is not tracked yet.
+23. **Pharmacy approval does not yet make a PENDING pharmacy visible.** Approving the account (SUPER_ADMIN review, not built) must also set the pharmacy record verified.
+24. **No address geocoding.** A pharmacy that signs up without `lat`/`lng` is never listed. Amazon Location Service should fill the coordinates from the address, and could also replace the straight-line distance with road distance.
+25. **Stock history and `GET /pharmacy/log/{pharmacyId}`** are not built: dispenses and rejections are recorded, but there is no log endpoint, and stock changes are not recorded individually.
+26. **One dispense per prescription.** There is no refill concept yet, so a second fill is refused. Confirm, or add repeats.
+27. **Demo pharmacies cannot be logged into.** To dispense in development, sign up a PHARMACY account (its stock starts empty; set it with `PUT /pharmacy/stock/{id}`).

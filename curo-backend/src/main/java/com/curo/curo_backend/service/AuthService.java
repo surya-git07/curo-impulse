@@ -7,13 +7,16 @@ import com.curo.curo_backend.dto.SignupResponse;
 import com.curo.curo_backend.dto.UserSummary;
 import com.curo.curo_backend.model.AppUser;
 import com.curo.curo_backend.model.Consent;
+import com.curo.curo_backend.model.Pharmacy;
 import com.curo.curo_backend.model.VerificationStatus;
+import com.curo.curo_backend.repository.PharmacyRepository;
 import com.curo.curo_backend.repository.UserRepository;
 import com.curo.curo_backend.security.JwtService;
 import com.curo.curo_backend.util.GstinValidator;
 import com.curo.curo_backend.util.IndianStates;
 import com.curo.curo_backend.util.LicenceNumbers;
 import io.jsonwebtoken.Claims;
+import org.bson.types.ObjectId;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -37,6 +40,9 @@ public class AuthService {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private PharmacyRepository pharmacyRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -89,6 +95,10 @@ public class AuthService {
             checkDoctorLicence(request, user);
         } else if (PHARMACY.equals(role)) {
             checkPharmacyLicence(request, user);
+            checkLocation(request);
+            // the pharmacy record is created after the user; its id is fixed now so the user can point at it in one write
+            user.setFacilityId(new ObjectId().toHexString());
+            user.setFacilityName(user.getName());
         }
 
         Consent consent = new Consent();
@@ -101,8 +111,42 @@ public class AuthService {
         user.setCreatedAt(Instant.now());
 
         AppUser saved = saveWithNewCareId(user);
+        if (PHARMACY.equals(role)) {
+            createPharmacy(saved, request);
+        }
         return new SignupResponse(saved.getId(), saved.getCareId(), saved.getName(), saved.getRole(), saved.getConsent(),
-                saved.getVerificationStatus(), saved.getVerificationReasonCode(), saved.getVerificationReason());
+                saved.getVerificationStatus(), saved.getVerificationReasonCode(), saved.getVerificationReason(), saved.getFacilityId());
+    }
+
+    // lat and lng go together; address is free text. Without coordinates the pharmacy simply is not in the nearby finder yet.
+    private void checkLocation(SignupRequest request) {
+        Double lat = request.getLat();
+        Double lng = request.getLng();
+        if ((lat == null) != (lng == null)
+                || lat != null && (!Double.isFinite(lat) || !Double.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_COORDINATES",
+                    "Send lat and lng together: lat between -90 and 90, lng between -180 and 180.");
+        }
+    }
+
+    private void createPharmacy(AppUser owner, SignupRequest request) {
+        Pharmacy pharmacy = new Pharmacy();
+        pharmacy.setId(owner.getFacilityId());
+        pharmacy.setName(owner.getName());
+        pharmacy.setAddress(request.getAddress() == null || request.getAddress().isBlank() ? null : request.getAddress().trim());
+        pharmacy.setState(owner.getState());
+        pharmacy.setLat(request.getLat());
+        pharmacy.setLng(request.getLng());
+        // only a licence that matched the registry is listed to patients; a PENDING one is listed once approved
+        pharmacy.setVerified(owner.getVerificationStatus() == VerificationStatus.VERIFIED);
+        pharmacy.setOwnerUserId(owner.getId());
+        try {
+            pharmacyRepository.save(pharmacy);
+        } catch (RuntimeException e) {
+            // no account without its pharmacy: undo the user so the applicant can simply try again
+            userRepository.delete(owner);
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "PHARMACY_UNAVAILABLE", "Could not create the pharmacy. Please try again.");
+        }
     }
 
     public LoginResponse login(LoginRequest request) {

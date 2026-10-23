@@ -18,6 +18,7 @@ class CuroBackendApplicationTests {
 		registry.add("spring.data.mongodb.auto-index-creation", () -> "false");
 		registry.add("licence.verification.seed-on-startup", () -> "false");
         registry.add("drugs.seed-on-startup", () -> "false");
+        registry.add("pharmacies.seed-on-startup", () -> "false");
 	}
 
 	@Test

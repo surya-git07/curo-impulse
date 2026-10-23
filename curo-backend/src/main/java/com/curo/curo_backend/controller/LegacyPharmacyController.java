@@ -2,12 +2,12 @@ package com.curo.curo_backend.controller;
 
 import org.springframework.context.annotation.Profile;
 import com.curo.curo_backend.dto.DispenseRequest;
-import com.curo.curo_backend.model.DispensingLog;
-import com.curo.curo_backend.model.PharmacyStock;
+import com.curo.curo_backend.model.legacy.DispensingLog;
+import com.curo.curo_backend.model.legacy.PharmacyStock;
 import com.curo.curo_backend.model.legacy.Prescription;
 import com.curo.curo_backend.model.legacy.PrescriptionGroup;
-import com.curo.curo_backend.repository.DispensingLogRepository;
-import com.curo.curo_backend.repository.PharmacyStockRepository;
+import com.curo.curo_backend.repository.legacy.DispensingLogRepository;
+import com.curo.curo_backend.repository.legacy.PharmacyStockRepository;
 import com.curo.curo_backend.repository.legacy.PrescriptionGroupRepository;
 import com.curo.curo_backend.repository.legacy.PrescriptionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,8 +19,8 @@ import java.util.*;
 
 @Profile("legacy-jpa")
 @RestController
-@RequestMapping("/pharmacy")
-public class PharmacyController {
+@RequestMapping("/legacy/pharmacy")
+public class LegacyPharmacyController {
 
     @Autowired
     private PharmacyStockRepository stockRepository;

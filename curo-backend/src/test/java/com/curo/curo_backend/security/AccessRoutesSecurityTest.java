@@ -30,6 +30,7 @@ class AccessRoutesSecurityTest {
         registry.add("spring.data.mongodb.auto-index-creation", () -> "false");
         registry.add("licence.verification.seed-on-startup", () -> "false");
         registry.add("drugs.seed-on-startup", () -> "false");
+        registry.add("pharmacies.seed-on-startup", () -> "false");
     }
 
     @Autowired
@@ -150,6 +151,23 @@ class AccessRoutesSecurityTest {
         assertThat(statusOf(get("/internal"))).isIn(401, 403, 404);
         assertThat(statusOf(get("/patient/me/doses/today"))).isIn(401, 403);
         assertThat(statusOf(get("/some-other-path"))).isIn(401, 403);
+    }
+
+    @Test
+    void thePharmacyRoutesNeedALogin() throws Exception {
+        assertThat(statusOf(get("/pharmacies/nearby?lat=12.9&lng=77.6"))).isIn(401, 403);
+        assertThat(statusOf(get("/pharmacy/stock/pharm1"))).isIn(401, 403);
+        assertThat(statusOf(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/pharmacy/stock/pharm1").contentType("application/json").content("{}"))).isIn(401, 403);
+        assertThat(statusOf(post("/pharmacy/dispense").contentType("application/json").content("{}"))).isIn(401, 403);
+    }
+
+    @Test
+    void stockAndDispenseAreForPharmaciesNotPatientsDoctorsOrCaregivers() throws Exception {
+        for (String role : new String[]{"PATIENT", "DOCTOR", "CAREGIVER"}) {
+            assertThat(statusOf(as(role, get("/pharmacy/stock/pharm1")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/pharmacy/stock/pharm1").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, post("/pharmacy/dispense").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+        }
     }
 
     @Test

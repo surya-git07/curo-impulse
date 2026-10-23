@@ -7,6 +7,8 @@ import com.curo.curo_backend.dto.SignupResponse;
 import com.curo.curo_backend.model.AppUser;
 import com.curo.curo_backend.model.VerificationStatus;
 import com.curo.curo_backend.repository.LicenceRegistryRepository;
+import com.curo.curo_backend.repository.PharmacyRepository;
+import com.curo.curo_backend.model.Pharmacy;
 import com.curo.curo_backend.repository.UserRepository;
 import com.curo.curo_backend.security.JwtService;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +43,8 @@ class AuthServiceLicenceTest {
     private final Map<String, AppUser> byPhone = new HashMap<>();
     private final Map<String, AppUser> byCareId = new HashMap<>();
     private int careIdCounter = 0;
+    private final java.util.List<Pharmacy> pharmacies = new java.util.ArrayList<>();
+    private PharmacyRepository pharmacyRepository;
 
     @BeforeEach
     void setUp() {
@@ -80,6 +84,12 @@ class AuthServiceLicenceTest {
         ReflectionTestUtils.setField(service, "passwordEncoder", new BCryptPasswordEncoder(4));
         ReflectionTestUtils.setField(service, "jwtService", jwt);
         ReflectionTestUtils.setField(service, "careIdGenerator", generator);
+        pharmacyRepository = mock(PharmacyRepository.class);
+        when(pharmacyRepository.save(any(Pharmacy.class))).thenAnswer(inv -> {
+            pharmacies.add(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+        ReflectionTestUtils.setField(service, "pharmacyRepository", pharmacyRepository);
         ReflectionTestUtils.setField(service, "licenceVerificationService", verification);
     }
 
@@ -300,6 +310,94 @@ class AuthServiceLicenceTest {
 
         assertApiError(() -> service.signup(again), HttpStatus.CONFLICT, "LICENCE_TAKEN");
         assertThat(byPhone).hasSize(1);
+    }
+
+    // ---- the pharmacy record created at signup
+
+    private SignupRequest locatedPharmacy() {
+        SignupRequest r = validPharmacy();
+        r.setAddress("  1 Test Street, Chennai ");
+        r.setLat(13.0827);
+        r.setLng(80.2707);
+        return r;
+    }
+
+    @Test
+    void aVerifiedPharmacySignupCreatesAListedPharmacyLinkedToTheAccount() {
+        SignupResponse r = service.signup(locatedPharmacy());
+
+        assertThat(pharmacies).singleElement().satisfies(p -> {
+            assertThat(p.getId()).isEqualTo(r.getFacilityId()).isNotBlank();
+            assertThat(p.getName()).isEqualTo("Sri Velan Medicals");
+            assertThat(p.getAddress()).isEqualTo("1 Test Street, Chennai");
+            assertThat(p.getState()).isEqualTo("TN");
+            assertThat(p.getLat()).isEqualTo(13.0827);
+            assertThat(p.getLng()).isEqualTo(80.2707);
+            assertThat(p.isVerified()).isTrue();
+            assertThat(p.getOwnerUserId()).isEqualTo(r.getId());
+            assertThat(p.getSeedKey()).isNull();
+        });
+        AppUser user = byPhone.get("9000000003");
+        assertThat(user.getFacilityId()).isEqualTo(r.getFacilityId());
+        assertThat(user.getFacilityName()).isEqualTo("Sri Velan Medicals");
+    }
+
+    @Test
+    void aPendingPharmacyIsCreatedButNotListedUntilApproved() {
+        service.signup(pharmacy("tn/che/20b-00001", "33AAAAA0000A1Z9", "TN", "New Chemists"));
+
+        assertThat(pharmacies).singleElement().satisfies(p -> assertThat(p.isVerified()).isFalse());
+    }
+
+    @Test
+    void aPharmacyWithoutCoordinatesIsCreatedWithoutALocation() {
+        SignupRequest noCoords = validPharmacy();
+        noCoords.setAddress("1 Test Street, Chennai");
+
+        service.signup(noCoords);
+
+        assertThat(pharmacies).singleElement().satisfies(p -> {
+            assertThat(p.hasLocation()).isFalse();
+            assertThat(p.getAddress()).isEqualTo("1 Test Street, Chennai");
+        });
+    }
+
+    @Test
+    void coordinatesMustComeTogetherAndBeInRange() {
+        for (Double[] bad : new Double[][]{{13.0, null}, {null, 80.0}, {91.0, 80.0}, {-91.0, 80.0}, {13.0, 181.0}, {13.0, -181.0},
+                {Double.NaN, 80.0}}) {
+            SignupRequest r = validPharmacy();
+            r.setLat(bad[0]);
+            r.setLng(bad[1]);
+            assertRejectedWithoutSaving(r, HttpStatus.BAD_REQUEST, "INVALID_COORDINATES");
+        }
+        assertThat(pharmacies).isEmpty();
+    }
+
+    @Test
+    void ifThePharmacyCannotBeCreatedTheAccountIsUndone() {
+        when(pharmacyRepository.save(any(Pharmacy.class))).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("down"));
+
+        assertApiError(() -> service.signup(validPharmacy()), HttpStatus.INTERNAL_SERVER_ERROR, "PHARMACY_UNAVAILABLE");
+
+        org.mockito.Mockito.verify(users).delete(any(AppUser.class));
+    }
+
+    @Test
+    void doctorsAndPatientsGetNoPharmacy() {
+        service.signup(validDoctor());
+        service.signup(base("PATIENT", "Test Patient", "9000000001"));
+
+        assertThat(pharmacies).isEmpty();
+        assertThat(byPhone.get("9000000002").getFacilityId()).isNull();
+        assertThat(byPhone.get("9000000001").getFacilityId()).isNull();
+    }
+
+    @Test
+    void aRejectedPharmacyApplicationCreatesNothing() {
+        assertRejectedWithoutSaving(pharmacy("TN/CHE/20B-48213", "33AAGFS4821K1Z5", "TN", "Other Chemists"),
+                HttpStatus.BAD_REQUEST, "LICENCE_NAME_MISMATCH");
+        assertThat(pharmacies).isEmpty();
     }
 
     @Test

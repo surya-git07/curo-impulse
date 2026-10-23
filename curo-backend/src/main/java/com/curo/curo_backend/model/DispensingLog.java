@@ -1,27 +1,43 @@
 package com.curo.curo_backend.model;
 
 import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.index.CompoundIndexes;
+import org.springframework.data.mongodb.core.mapping.Document;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
+/** One attempt by a pharmacy to dispense a prescription. Append-only. */
 @Data
+@Document("dispensing_logs")
+@CompoundIndexes({
+        // a prescription is dispensed once: the database itself refuses a second DISPENSED row, even for two simultaneous requests
+        @CompoundIndex(name = "prescription_dispensed_unique", def = "{'prescriptionId': 1}", unique = true,
+                partialFilter = "{'status': 'DISPENSED'}"),
+        @CompoundIndex(name = "pharmacy_at", def = "{'pharmacyId': 1, 'at': -1}")
+})
 public class DispensingLog {
 
-    private Integer id;
+    @Id
+    private String id;
 
-    private Integer prescriptionId;
+    private String prescriptionId;
 
-    private Integer pharmacyId;
+    private String pharmacyId;
 
-    private Integer qtyDispensed;
+    private String careId;
 
-    private LocalDateTime dispensedAt;
+    private String drug;
 
-    private String status;
+    private int quantity;
 
-    private String drugName;
+    private DispenseStatus status;
 
-    private String patientAbha;
-
+    // why a REJECTED attempt was refused
     private String rejectReason;
+
+    private String dispensedByUserId;
+
+    private Instant at;
 }
