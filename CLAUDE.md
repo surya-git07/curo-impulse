@@ -1,4 +1,4 @@
-# MedSync (IMPULSE '26)
+# Curo (IMPULSE '26)
 Patient-doctor medication coordination. Spring Boot + MongoDB Atlas + React + Expo app. AWS: EC2, EventBridge+SNS, Bedrock, Location Service.
 
 ## Ownership (one owner per folder, own branch)
