@@ -184,3 +184,19 @@ export async function getTodayDoses() {
 export async function markDoseTaken(id) {
   return request('POST', `/doses/${encodeURIComponent(id)}/taken`, { body: {} });
 }
+
+// ---- share codes ---------------------------------------------------------
+// shareCode is a 6-digit code but MUST be treated as a string (leading zeros
+// like "042913" are significant — never parse as a number).
+export async function createShareCode(scope = ['PROFILE', 'PRESCRIPTIONS'], durationHours = 24) {
+  const path = '/patient/me/share-codes';
+  const res = await request('POST', path, { body: { scope, durationHours } });
+  if (!res || !isStr(res.shareCode) || !isStr(res.expiresAt)) {
+    throw shapeError(path, 'share code');
+  }
+  return {
+    shareCode: res.shareCode,       // string, keep as-is, never Number(res.shareCode)
+    expiresAt: res.expiresAt,       // UTC instant
+    expiresAtDisplay: istTime(res.expiresAt), // for on-screen display
+  };
+}
