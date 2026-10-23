@@ -368,16 +368,17 @@ Request/response keep old shapes with `patientAbha` renamed `careId`. All patien
 
 Self-view uses `/patient/me/...` (no grant). The same data for others uses `/patient/{careId}/...` and is grant-gated: DOCTOR/PHARMACY with a matching grant, CAREGIVER with an active caregiver link (section 10).
 
-**Schedule generation:** doses are generated server-side when a prescription group is `DISPENSED`, from `frequency` / `times` over `durationDays`, starting at dispense time. A modify regenerates unfulfilled future doses; a discontinue cancels them. Dose statuses: `PENDING`, `TAKEN`, `MISSED`.
+**Schedule generation (as built):** doses are created server-side when a prescription is issued, from its times over its days, starting from the issue date (dispensing is not tracked yet, so it does not wait for a dispense). Times are local (Asia/Kolkata), stored as UTC instants; a time already past when the prescription is issued gets no dose. A prescription with no end date is scheduled for a rolling 30 days; "as needed" (no frequency) gets none. A modify that changes the times or the length cancels the doses still ahead and rebuilds them (a dose changed only in text leaves them alone); anything already taken keeps its slot. A discontinue cancels the doses still ahead; past doses, taken or missed, stay as history. Dose statuses: `UPCOMING`, `TAKEN`, `MISSED`. Only the server ever sets `MISSED`; no endpoint accepts a status.
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
 | NEW | `GET /patient/me/medications` | PATIENT | none | current medication profile (below) |
 | NEW | `GET /patient/{careId}/medications` | DOCTOR, PHARMACY, CAREGIVER | none | same, gated (`MEDICATIONS`) |
-| NEW | `GET /patient/me/dose-schedule?from=&to=` | PATIENT | none | `[Dose]` between the dates (default today to +7 days) |
+| NEW | `GET /patient/me/doses/today` | PATIENT | none | `[Dose]` due today (Indian local day), earliest first |
+| NEW | `GET /patient/me/dose-schedule?from=&to=` | PATIENT | none | `[Dose]` between the dates (default today to +7 days). **Not built yet**; use `doses/today` |
 | NEW | `GET /patient/{careId}/dose-schedule?from=&to=` | DOCTOR, CAREGIVER | none | same, gated (`MEDICATIONS`) |
-| NEW | `POST /doses/{id}/taken` | PATIENT (own dose), CAREGIVER (active link, `DOSES`) | `{takenAt?}` (default now; must not be in the future, else 400) | Dose with `status:"TAKEN"`. 404 unknown; 403 `NO_ACTIVE_GRANT` for a caregiver without a link; 409 `DOSE_ALREADY_TAKEN`. A `MISSED` dose can still be marked taken and is then flagged `late:true` |
-| NEW | `GET /patient/me/dose-log?from=&to=&status=&page=&size=` | PATIENT | none | paged `[Dose]` history, newest first |
+| NEW | `POST /doses/{id}/taken` | PATIENT (own dose). CAREGIVER is not built yet | `{takenAt?}` (default now; must not be in the future, else 400 `INVALID_TIME`; any other field, such as a status, is ignored) | The Dose with `status:"TAKEN"`, `takenAt` and `markedBy`. 404 `DOSE_NOT_FOUND` if unknown **or not yours**; 409 `DOSE_ALREADY_TAKEN` (the first record is kept; two taps at once give exactly one 200). `late:true` if taken more than the grace period (30 min) after it was due, or if it had already been marked `MISSED`; a missed dose can still be marked taken |
+| NEW | `GET /patient/me/dose-log?from=&to=&status=&page=&size=` | PATIENT | none | paged `[Dose]` history, newest first. Without `status` it shows what has happened (`TAKEN` and `MISSED`); `status=UPCOMING` shows what is ahead |
 | NEW | `GET /patient/{careId}/dose-log?...` | DOCTOR, CAREGIVER | none | same, gated (`DOSES`) |
 
 **Current medication profile**
@@ -486,17 +487,18 @@ A caregiver link is a request to hold a standing `CAREGIVER` AccessGrant on one 
   "byDay": [ { "date": "2026-10-23", "taken": 2, "missed": 1 } ]
 }
 ```
-`adherencePct = taken / (taken + missed) * 100`, one decimal. Doses still `PENDING` (in the future) are excluded. `null` when `taken + missed` is 0. Default range is the last 7 days.
+`adherencePct = taken / (taken + missed) * 100`, one decimal. Doses still `UPCOMING` (in the future) are excluded. `null` when `taken + missed` is 0. Default range is the last 7 days.
 
 ### Scheduler endpoint (EventBridge only)
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `POST /internal/scheduler/dose-tick` | **`X-Internal-Key` header** (env `INTERNAL_API_KEY`), no JWT, never called by app clients | `{ "task": "ALL" }` where `task` is `REMINDERS`, `MISSED` or `ALL` (default `ALL`) | `{ "remindersSent": 4, "markedMissed": 2, "alertsCreated": 6 }` |
+| NEW | `POST /internal/scheduler/dose-tick` | **`X-Internal-Key` header** (env `INTERNAL_API_KEY`), no JWT, never called by app clients | `{ "task": "ALL" }` where `task` is `REMINDERS`, `MISSED` or `ALL` (default `ALL`) | `{ "remindersSent": 0, "markedMissed": 2, "alertsCreated": 0 }`. 401 `INVALID_KEY` for a missing or wrong key, and for every call if `INTERNAL_API_KEY` is not set; 400 for an unknown `task`. **As built only `MISSED` does work**; `REMINDERS` is accepted and does nothing until alerts exist |
 
 - Called by an EventBridge rule (proposed `rate(5 minutes)`) through an API destination. The key lives in the EventBridge connection and in the server env, never in source or this file. Missing or wrong key: 401.
-- `REMINDERS`: for every `PENDING` dose due within the reminder lead time (proposed 10 min) with no reminder yet, create a `DOSE_REMINDER` alert and push to the patient.
-- `MISSED`: for every `PENDING` dose more than the grace period past `scheduledAt` (proposed 30 min), set `status:"MISSED"`, create a `MISSED_DOSE` alert for the patient and for each caregiver with an active link.
-- Idempotent: each dose records `reminderSentAt` and a status transition, so retries, duplicate deliveries and overlapping runs do not send twice.
+- `REMINDERS`: for every `UPCOMING` dose due within the reminder lead time (proposed 10 min) with no reminder yet, create a `DOSE_REMINDER` alert and push to the patient.
+- `MISSED`: every `UPCOMING` dose that is 30 minutes (`doses.missed-grace-minutes`) or more past `scheduledAt` becomes `MISSED`, in one atomic update that never touches a `TAKEN` dose. The `MISSED_DOSE` alert to the patient and caregivers comes with alerts.
+- Idempotent: a dose only moves `UPCOMING` to `MISSED` once, so retries, duplicate deliveries and overlapping runs change nothing the second time.
+- The shared secret is compared in constant time and is never logged or returned.
 - Ownership: the Spring side is Vasuki's; the EventBridge rule, API destination and key are Surya's (infra/).
 
 ## 11. Pharmacy and drugs
@@ -584,3 +586,6 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 17. **A doctor with only a `PRESCRIPTIONS` grant still sees allergy warnings** when issuing, because an allergy conflict is safety-critical. The allergy list itself (`PROFILE` scope) is not shown to them.
 18. **`POST /checks/interaction` is not built yet.** The check runs on issue only; the standalone endpoint, the dose schedule, QR/group dispensing and the `PRESCRIPTION_CHANGED` alert come later. `/ai/risk-score` and the old `/prescription/*` pharmacy endpoints remain in the disabled legacy code under `/legacy/prescription`.
 19. **Patient profile:** only allergies are stored. Name changes, conditions, date of birth and blood group (and so `ageYears` and `gender` on `/careid`) are still to do.
+20. **Reminders and the `MISSED_DOSE` alert are not built.** The scheduler endpoint marks doses missed but tells no one. Caregiver marking of doses, the grant-gated clinician view of a patient's doses, and the adherence report also wait for alerts and caregiver links.
+21. **Rolling 30-day horizon for open-ended prescriptions** is never topped up. A prescription with no end date runs out of doses after 30 days unless it is modified. A nightly top-up in the scheduler tick would fix it.
+22. **Doses start at the issue date**, not the dispense date, because dispensing is not tracked yet.

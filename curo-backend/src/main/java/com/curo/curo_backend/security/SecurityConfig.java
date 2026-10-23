@@ -54,6 +54,7 @@ public class SecurityConfig {
                         .hasRole("SUPER_ADMIN")
                         // New patient-data endpoints decide access in AccessGuard, so /patient/** is no longer public
                         .requestMatchers("/patient/me", "/patient/me/**").hasRole("PATIENT")
+                        .requestMatchers("/doses/**").hasRole("PATIENT")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/medications").hasAnyRole("DOCTOR", "PHARMACY", "CAREGIVER")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/prescription/*/history").hasAnyRole("DOCTOR", "PHARMACY")
                         .requestMatchers("/auth/**", "/hospital/**", "/pharmacy-facility/**").permitAll()

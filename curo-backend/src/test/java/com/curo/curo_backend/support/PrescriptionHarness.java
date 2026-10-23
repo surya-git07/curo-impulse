@@ -4,6 +4,8 @@ import com.curo.curo_backend.model.AccessGrant;
 import com.curo.curo_backend.model.AppUser;
 import com.curo.curo_backend.model.AuditLog;
 import com.curo.curo_backend.model.ChangeType;
+import com.curo.curo_backend.model.DoseLog;
+import com.curo.curo_backend.model.DoseStatus;
 import com.curo.curo_backend.model.Frequency;
 import com.curo.curo_backend.model.GrantScope;
 import com.curo.curo_backend.model.GrantStatus;
@@ -12,12 +14,15 @@ import com.curo.curo_backend.model.PrescriptionStatus;
 import com.curo.curo_backend.model.PrescriptionVersion;
 import com.curo.curo_backend.repository.AccessGrantRepository;
 import com.curo.curo_backend.repository.AuditLogRepository;
+import com.curo.curo_backend.repository.DoseLogRepository;
 import com.curo.curo_backend.repository.DrugMasterRepository;
 import com.curo.curo_backend.repository.PrescriptionRepository;
 import com.curo.curo_backend.repository.UserRepository;
 import com.curo.curo_backend.service.AccessGuard;
 import com.curo.curo_backend.service.AuditService;
 import com.curo.curo_backend.service.CurrentUserService;
+import com.curo.curo_backend.service.DoseScheduleService;
+import com.curo.curo_backend.service.DoseService;
 import com.curo.curo_backend.service.DrugCatalog;
 import com.curo.curo_backend.service.InteractionChecker;
 import com.curo.curo_backend.service.MedicationService;
@@ -70,6 +75,11 @@ public class PrescriptionHarness {
     public final PrescriptionService prescriptionService = new PrescriptionService();
     public final MedicationService medicationService = new MedicationService();
     public final TableInteractionChecker checker = new TableInteractionChecker();
+    public final List<DoseLog> doseLogs = new ArrayList<>();
+    public final DoseLogRepository doseLogRepository = mock(DoseLogRepository.class);
+    public final DoseScheduleService doseScheduleService = new DoseScheduleService();
+    public final DoseService doseService = new DoseService();
+    private int nextDose = 1;
 
     private int nextPrescription = 1;
     private int nextGrant = 1;
@@ -143,7 +153,63 @@ public class PrescriptionHarness {
         ReflectionTestUtils.setField(medicationService, "prescriptionRepository", prescriptionRepository);
         ReflectionTestUtils.setField(medicationService, "clock", clock);
 
+        wireDoses(currentUser);
+
         signIn(doctor);
+    }
+
+    private void wireDoses(CurrentUserService currentUser) {
+        when(doseLogRepository.saveAll(any(Iterable.class))).thenAnswer(inv -> {
+            List<DoseLog> saved = new ArrayList<>();
+            for (Object o : (Iterable<?>) inv.getArgument(0)) {
+                DoseLog d = (DoseLog) o;
+                if (d.getId() == null) {
+                    d.setId("dose" + nextDose++);
+                }
+                doseLogs.add(d);
+                saved.add(d);
+            }
+            return saved;
+        });
+        when(doseLogRepository.findById(anyString())).thenAnswer(inv -> doseLogs.stream().filter(d -> d.getId().equals(inv.getArgument(0))).findFirst());
+        when(doseLogRepository.findByPrescriptionIdAndScheduledAtAfter(anyString(), any(Instant.class))).thenAnswer(inv ->
+                doseLogs.stream().filter(d -> d.getPrescriptionId().equals(inv.getArgument(0)) && d.getScheduledAt().isAfter(inv.getArgument(1))).toList());
+        when(doseLogRepository.deleteByPrescriptionIdAndStatusAndScheduledAtAfter(anyString(), any(DoseStatus.class), any(Instant.class))).thenAnswer(inv -> {
+            List<DoseLog> gone = doseLogs.stream().filter(d -> d.getPrescriptionId().equals(inv.getArgument(0))
+                    && d.getStatus() == inv.getArgument(1) && d.getScheduledAt().isAfter(inv.getArgument(2))).toList();
+            doseLogs.removeAll(gone);
+            return (long) gone.size();
+        });
+        when(doseLogRepository.findByPatientIdAndScheduledAtGreaterThanEqualAndScheduledAtLessThanOrderByScheduledAt(anyString(), any(Instant.class), any(Instant.class)))
+                .thenAnswer(inv -> doseLogs.stream().filter(d -> d.getPatientId().equals(inv.getArgument(0))
+                        && !d.getScheduledAt().isBefore(inv.getArgument(1)) && d.getScheduledAt().isBefore(inv.getArgument(2)))
+                        .sorted(java.util.Comparator.comparing(DoseLog::getScheduledAt)).toList());
+        when(prescriptionRepository.findAllById(any(Iterable.class))).thenAnswer(inv -> {
+            List<Prescription> found = new ArrayList<>();
+            for (Object id : (Iterable<?>) inv.getArgument(0)) {
+                if (prescriptions.containsKey(id)) {
+                    found.add(prescriptions.get(id));
+                }
+            }
+            return found;
+        });
+
+        ReflectionTestUtils.setField(doseScheduleService, "timeZone", "Asia/Kolkata");
+        ReflectionTestUtils.setField(doseScheduleService, "horizonDays", 30);
+        ReflectionTestUtils.setField(doseScheduleService, "graceMinutes", 30);
+        ReflectionTestUtils.setField(doseScheduleService, "doseLogRepository", doseLogRepository);
+        ReflectionTestUtils.setField(doseScheduleService, "doseUpdates", new FakeDoseUpdates(doseLogs));
+        ReflectionTestUtils.setField(doseScheduleService, "clock", clock);
+
+        ReflectionTestUtils.setField(doseService, "timeZone", "Asia/Kolkata");
+        ReflectionTestUtils.setField(doseService, "currentUser", currentUser);
+        ReflectionTestUtils.setField(doseService, "doseLogRepository", doseLogRepository);
+        ReflectionTestUtils.setField(doseService, "doseUpdates", new FakeDoseUpdates(doseLogs));
+        ReflectionTestUtils.setField(doseService, "doseScheduleService", doseScheduleService);
+        ReflectionTestUtils.setField(doseService, "prescriptionRepository", prescriptionRepository);
+        ReflectionTestUtils.setField(doseService, "mongoTemplate", mock(MongoTemplate.class));
+        ReflectionTestUtils.setField(doseService, "clock", clock);
+        ReflectionTestUtils.setField(prescriptionService, "doseScheduleService", doseScheduleService);
     }
 
     private Prescription store(Prescription p) {

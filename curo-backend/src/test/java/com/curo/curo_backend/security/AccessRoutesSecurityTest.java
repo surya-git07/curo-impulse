@@ -118,6 +118,41 @@ class AccessRoutesSecurityTest {
     }
 
     @Test
+    void theDoseRoutesNeedALoginAndAPatient() throws Exception {
+        assertThat(statusOf(get("/patient/me/doses/today"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/me/dose-log"))).isIn(401, 403);
+        assertThat(statusOf(post("/doses/d1/taken"))).isIn(401, 403);
+        for (String role : new String[]{"DOCTOR", "PHARMACY", "CAREGIVER", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, get("/patient/me/doses/today")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, get("/patient/me/dose-log")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, post("/doses/d1/taken")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void theSchedulerEndpointIsReachableWithoutAJwtButRefusesWithoutTheKey() throws Exception {
+        var noKey = mvc.perform(post("/internal/scheduler/dose-tick")).andReturn().getResponse();
+        assertThat(noKey.getStatus()).as("refused by the controller, not by the login filter").isEqualTo(401);
+        assertThat(noKey.getContentAsString()).contains("INVALID_KEY");
+
+        var wrongKey = mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", "wrong")).andReturn().getResponse();
+        assertThat(wrongKey.getStatus()).isEqualTo(401);
+        assertThat(wrongKey.getContentAsString()).contains("INVALID_KEY").doesNotContain("wrong");
+
+        // a signed-in user of any role is not the scheduler
+        for (String role : new String[]{"PATIENT", "DOCTOR", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, post("/internal/scheduler/dose-tick")))).as(role).isEqualTo(401);
+        }
+    }
+
+    @Test
+    void onlyTheSchedulerPathIsOpenedUp() throws Exception {
+        assertThat(statusOf(get("/internal"))).isIn(401, 403, 404);
+        assertThat(statusOf(get("/patient/me/doses/today"))).isIn(401, 403);
+        assertThat(statusOf(get("/some-other-path"))).isIn(401, 403);
+    }
+
+    @Test
     void aForgedTokenIsNotAccepted() throws Exception {
         String forged = new JwtService() {
             {

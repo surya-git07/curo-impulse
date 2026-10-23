@@ -79,6 +79,9 @@ public class PrescriptionService {
     @Autowired
     private Clock clock;
 
+    @Autowired
+    private DoseScheduleService doseScheduleService;
+
     private record Schedule(Frequency frequency, List<String> times) {
     }
 
@@ -134,6 +137,7 @@ public class PrescriptionService {
 
         // Saved whatever the warnings say. The check advises; it never blocks.
         List<Prescription> saved = prescriptionRepository.saveAll(created);
+        saved.forEach(p -> scheduleDoses(p, patient, false));
         return new IssueResponse(saved.stream().map(p -> view(p, false)).toList(), warnings);
     }
 
@@ -142,11 +146,13 @@ public class PrescriptionService {
     public PrescriptionView modify(String id, ModifyRequest request) {
         AppUser doctor = requireDoctor();
         Prescription p = find(id);
-        accessGuard.require(p.getCareId(), GrantScope.PRESCRIPTIONS, AuditAction.WRITE, "PRESCRIPTION", id);
+        AppUser patient = accessGuard.require(p.getCareId(), GrantScope.PRESCRIPTIONS, AuditAction.WRITE, "PRESCRIPTION", id).patient();
         requireIssuer(doctor, p);
         requireActive(p);
 
         String reason = requireReason(request.getReason());
+        List<String> oldTimes = p.getSchedule();
+        Integer oldDays = p.getDurationDays();
 
         String dose = p.getDose();
         if (request.getDose() != null) {
@@ -183,7 +189,12 @@ public class PrescriptionService {
         p.setFrequency(frequency);
         p.setSchedule(times);
         appendVersion(p, ChangeType.MODIFIED, reason, doctor, clock.instant());
-        return view(prescriptionRepository.save(p), true);
+        Prescription saved = prescriptionRepository.save(p);
+        // A dose-text change leaves the schedule alone; a change to the times or the length rebuilds the doses still ahead
+        if (!Objects.equals(oldTimes, saved.getSchedule()) || !Objects.equals(oldDays, saved.getDurationDays())) {
+            scheduleDoses(saved, patient, true);
+        }
+        return view(saved, true);
     }
 
     // ---- discontinue
@@ -200,7 +211,13 @@ public class PrescriptionService {
         p.setStatus(PrescriptionStatus.DISCONTINUED);
         p.setDiscontinuedAt(now);
         appendVersion(p, ChangeType.DISCONTINUED, reason, doctor, now);
-        return view(prescriptionRepository.save(p), true);
+        Prescription saved = prescriptionRepository.save(p);
+        try {
+            doseScheduleService.cancelFuture(saved.getId()); // past doses stay as history
+        } catch (RuntimeException e) {
+            log.warn("future doses of {} could not be cancelled ({})", saved.getId(), e.getClass().getSimpleName());
+        }
+        return view(saved, true);
     }
 
     // ---- history
@@ -216,6 +233,18 @@ public class PrescriptionService {
     }
 
     // ---- helpers
+
+    // The prescription is already saved, so a problem here must not turn the response into an error (a retry would issue it twice)
+    private void scheduleDoses(Prescription p, AppUser patient, boolean replaceFuture) {
+        try {
+            if (replaceFuture) {
+                doseScheduleService.cancelFuture(p.getId());
+            }
+            doseScheduleService.generate(p, patient.getId());
+        } catch (RuntimeException e) {
+            log.warn("doses for prescription {} could not be scheduled ({})", p.getId(), e.getClass().getSimpleName());
+        }
+    }
 
     private AppUser requireDoctor() {
         AppUser user = currentUser.require();
