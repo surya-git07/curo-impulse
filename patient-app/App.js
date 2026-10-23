@@ -14,6 +14,8 @@ import QrTab from './QrTab';
 import PrivacyNotice from './PrivacyNotice';
 import ShareRecord from './ShareRecord';
 import ConsentApproval from './ConsentApproval';
+import * as api from './api';
+import { MOCK_MODE } from './config';
 import {
   MOCK_PATIENT, MOCK_PRESCRIPTIONS, MOCK_TODAY_SCHEDULE,
   MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG,
@@ -86,8 +88,12 @@ function AppInner() {
   const [newPassword, setNewPassword] = useState('');
 
   const [patient, setPatient] = useState(null);
-  const [prescriptions, setPrescriptions] = useState([]);
+  const [prescriptions, setPrescriptions] = useState([]);   // History (always mock)
+  const [homePrescriptions, setHomePrescriptions] = useState([]); // Home (live, or mock fallback)
+  const [medications, setMedications] = useState(null);     // live only; null hides the card list
   const [schedule, setSchedule] = useState([]);
+  const [scheduleLive, setScheduleLive] = useState(false);  // true when doses came from the server
+  const [loggingIn, setLoggingIn] = useState(false);
 
   const [search, setSearch] = useState('');
   const [antibioticOnly, setAntibioticOnly] = useState(false);
@@ -116,14 +122,95 @@ function AppInner() {
     setNewCareId(makeCareId());
   };
 
-  const doLogin = () => {
-    if (!phone || !password) return Alert.alert('Enter phone and password');
+  const loginMock = () => {
     setPatient(MOCK_PATIENT);
     setPrescriptions(MOCK_PRESCRIPTIONS);
+    setHomePrescriptions(MOCK_PRESCRIPTIONS);
+    setMedications(null);
     setSchedule(MOCK_TODAY_SCHEDULE);
+    setScheduleLive(false);
     setPassword('');
     setScreen(MOCK_PATIENT.profileCompleted ? 'app' : 'profile');
     setTab('home');
+  };
+
+  // Token missing, expired or rejected: back to the login screen.
+  const expireSession = () => {
+    logout();
+    Alert.alert('Session expired', 'Please log in again.');
+  };
+
+  // Home + Today data. Each call falls back to its mock on its own; an auth
+  // error is rethrown so the caller can end the session instead.
+  // Prescriptions stay mock: GET /patient/me/prescriptions/detailed is not built
+  // yet, so it is not called at all (no request, no retry, no offline toast).
+  const loadHome = async (user) => {
+    let fellBack = false;
+    const orMock = async (call, mock) => {
+      try {
+        return await call();
+      } catch (e) {
+        if (api.isAuthError(e)) throw e;
+        fellBack = true;
+        return mock;
+      }
+    };
+    const [me, meds, doses] = await Promise.all([
+      orMock(() => api.getMe(user), null),
+      orMock(() => api.getMedications(), null),
+      orMock(() => api.getTodayDoses(), null),
+    ]);
+    setPatient(me || MOCK_PATIENT);
+    setHomePrescriptions(MOCK_PRESCRIPTIONS);
+    setMedications(meds);
+    setSchedule(doses || MOCK_TODAY_SCHEDULE);
+    setScheduleLive(!!doses);
+    setPrescriptions(MOCK_PRESCRIPTIONS); // History stays mock
+    if (fellBack) showToast('Using offline demo data');
+  };
+
+  const LOGIN_MESSAGES = {
+    INVALID_CREDENTIALS: 'Wrong CareID/phone or password.',
+    ACCOUNT_PENDING: 'Your account is waiting for approval.',
+    ACCOUNT_REJECTED: 'Your account was not approved. Contact your facility.',
+  };
+
+  const doLogin = async () => {
+    if (!phone || !password) return Alert.alert('Enter your CareID or phone and password');
+    if (loggingIn) return;
+    if (MOCK_MODE) return loginMock();
+
+    setLoggingIn(true);
+    try {
+      let user;
+      try {
+        user = await api.login(phone.trim(), password);
+      } catch (e) {
+        if (e instanceof api.ApiError && e.kind === 'http' && e.status >= 400 && e.status < 500) {
+          // A real answer from the server: show it, never fall back to the demo account.
+          return Alert.alert('Login failed', LOGIN_MESSAGES[e.code] || `The server refused the login (${e.status}).`);
+        }
+        // Network error, timeout, 5xx or unexpected response.
+        loginMock();
+        return showToast('Using offline demo data');
+      }
+
+      if (user.role !== 'PATIENT') {
+        api.clearSession();
+        return Alert.alert('Patients only', 'This app is for patients. Please use the staff site.');
+      }
+
+      setPassword('');
+      try {
+        await loadHome(user);
+      } catch (e) {
+        return expireSession(); // loadHome only rethrows auth errors
+      }
+      setScreen(user.profileCompleted ? 'app' : 'profile');
+      setTab('home');
+    } finally {
+      setLoggingIn(false);
+    }
   };
 
   const sendResetOtp = () => {
@@ -141,12 +228,38 @@ function AppInner() {
   };
 
   const logout = () => {
-    setPatient(null); setPrescriptions([]); setSchedule([]);
+    api.clearSession();
+    setPatient(null); setPrescriptions([]); setHomePrescriptions([]); setMedications(null);
+    setSchedule([]); setScheduleLive(false);
     setTab('home'); setShowActive(false); setVisitExpanded({}); setScreen('login');
   };
 
-  const toggleTaken = (id) =>
-    setSchedule((prev) => prev.map((d) => (d.id === id ? { ...d, taken: !d.taken } : d)));
+  const toggleTaken = async (id) => {
+    const dose = schedule.find((d) => d.id === id);
+    if (!dose) return;
+
+    // Mock / offline demo data: local toggle, as before.
+    if (!scheduleLive) {
+      return setSchedule((prev) => prev.map((d) => (d.id === id ? { ...d, taken: !d.taken } : d)));
+    }
+
+    // Live: there is no "un-take" endpoint, so a taken dose stays taken.
+    if (dose.taken || dose.pending) return;
+
+    const patch = (fields) => setSchedule((prev) => prev.map((d) => (d.id === id ? { ...d, ...fields } : d)));
+    patch({ taken: true, pending: true }); // optimistic
+    try {
+      const res = await api.markDoseTaken(id);
+      patch({ taken: true, pending: false, status: 'TAKEN', late: !!(res && res.late) }); // confirmed
+    } catch (e) {
+      if (e instanceof api.ApiError && e.status === 409 && e.code === 'DOSE_ALREADY_TAKEN') {
+        return patch({ taken: true, pending: false, status: 'TAKEN' }); // already recorded: same end state
+      }
+      setSchedule((prev) => prev.map((d) => (d.id === id ? dose : d))); // revert
+      if (api.isAuthError(e)) return expireSession();
+      showToast("Couldn't mark taken. Try again.");
+    }
+  };
 
   const toggleVisit = (key) => setVisitExpanded((v) => ({ ...v, [key]: !v[key] }));
 
@@ -258,10 +371,10 @@ function AppInner() {
         <View style={styles.authBody}>
           <Text style={styles.brand}>Curo</Text>
           <Text style={styles.subtitle}>Log in to your medicine record</Text>
-          <TextInput style={styles.input} placeholder="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+          <TextInput style={styles.input} placeholder="CareID or phone number" value={phone} onChangeText={setPhone} autoCapitalize="characters" autoCorrect={false} />
           <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
-          <TouchableOpacity style={styles.button} onPress={doLogin}>
-            <Text style={styles.buttonText}>Log In</Text>
+          <TouchableOpacity style={styles.button} onPress={doLogin} disabled={loggingIn}>
+            <Text style={styles.buttonText}>{loggingIn ? 'Logging in…' : 'Log In'}</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setScreen('forgot')}>
             <Text style={styles.forgot}>Forgot password?</Text>
@@ -280,7 +393,7 @@ function AppInner() {
     const match = p.drugName?.toLowerCase().includes(q) || p.doctorName?.toLowerCase().includes(q) || p.hospitalName?.toLowerCase().includes(q);
     return match && (!antibioticOnly || p.isAntibiotic);
   });
-  const active = prescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
+  const active = homePrescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
   const conflicts = active.filter((p) => p.allergyConflict);
   const activeVisits = groupByVisit(active);
   const historyVisits = groupByVisit(filtered);
@@ -337,6 +450,20 @@ function AppInner() {
               </View>
             ) : null}
 
+            {/* Current medicines (live only) */}
+            {medications && medications.length > 0 ? (
+              <>
+                <Text style={styles.sectionTitle}>Current medicines</Text>
+                {medications.map((m) => (
+                  <View key={m.id} style={styles.card}>
+                    <Text style={styles.drugName}>{m.drug}</Text>
+                    <Text style={styles.cardValue}>{m.dose}{m.times.length > 0 ? ` · ${m.times.join(', ')}` : ''}</Text>
+                    {m.endDate ? <Text style={styles.cardValueFaint}>Until {m.endDate}</Text> : null}
+                  </View>
+                ))}
+              </>
+            ) : null}
+
             {active.length === 0 ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyIcon}>📋</Text>
@@ -366,7 +493,7 @@ function AppInner() {
                     <Text style={[styles.drugName, d.taken && styles.doneText]}>{d.drugName}</Text>
                     <Text style={styles.cardValue}>{d.dosage} · {d.time}</Text>
                   </View>
-                  <TouchableOpacity style={[styles.markBtn, d.taken && styles.markBtnDone]} onPress={() => toggleTaken(d.id)}>
+                  <TouchableOpacity style={[styles.markBtn, d.taken && styles.markBtnDone]} onPress={() => toggleTaken(d.id)} disabled={scheduleLive && d.taken}>
                     <Text style={[styles.markBtnText, d.taken && styles.markBtnTextDone]}>{d.taken ? '✓ Taken' : 'Mark taken'}</Text>
                   </TouchableOpacity>
                 </View>
