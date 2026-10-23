@@ -4,8 +4,7 @@ import {
   RELATIONS, GENDERS, ID_TYPES, BLANK_MEMBER,
   toForm, fromForm, validateMember, addMember, updateMember, removeMember,
 } from './familyLogic';
-
-const TEAL = '#0d7377';
+import { colors, type, card as cardStyle, shadow } from './theme';
 
 // Family members tab (local state, lifted into App so it survives tab switches).
 // members / onChange come from App; there is no backend family endpoint yet.
@@ -44,7 +43,7 @@ export default function FamilyTab({ members, onChange }) {
   const input = (key, label, extra = {}) => (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput style={styles.input} value={form[key]} onChangeText={(t) => set(key, t)} {...extra} />
+      <TextInput style={styles.input} placeholderTextColor={colors.placeholder} value={form[key]} onChangeText={(t) => set(key, t)} {...extra} />
     </View>
   );
 
@@ -101,6 +100,7 @@ export default function FamilyTab({ members, onChange }) {
           ) : members.map((m) => (
             <View key={m.id} style={styles.card}>
               <View style={styles.cardTop}>
+                <View style={styles.avatar}><Text style={styles.avatarText}>{(m.name || '?').charAt(0).toUpperCase()}</Text></View>
                 <Text style={styles.name}>{m.name}</Text>
                 <View style={styles.relationTag}><Text style={styles.relationText}>{m.relation}</Text></View>
               </View>
@@ -136,39 +136,41 @@ export default function FamilyTab({ members, onChange }) {
 
 const styles = StyleSheet.create({
   wrap: { paddingVertical: 8 },
-  heading: { fontSize: 13, fontWeight: '700', color: '#5a6a6a', marginVertical: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
-  button: { backgroundColor: TEAL, borderRadius: 10, padding: 15, alignItems: 'center' },
-  buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  link: { color: TEAL, textAlign: 'center', marginTop: 16, fontWeight: '600' },
+  heading: { ...type.sectionLabel, marginTop: 20, marginBottom: 10 },
+  button: { backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 15, alignItems: 'center', ...shadow },
+  buttonText: { color: colors.white, fontWeight: '700', fontSize: 16 },
+  link: { color: colors.primary, textAlign: 'center', marginTop: 16, fontWeight: '600', fontSize: 13 },
 
-  card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 12, elevation: 2 },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  name: { fontSize: 16, fontWeight: '700', color: '#1a3c3d', flexShrink: 1, marginRight: 8 },
-  relationTag: { backgroundColor: '#e3f5f5', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10 },
-  relationText: { fontSize: 11, fontWeight: '700', color: TEAL },
-  sub: { fontSize: 13, color: '#667', marginTop: 3 },
+  card: { ...cardStyle, padding: 16, marginBottom: 12 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  avatarText: { fontSize: 16, fontWeight: '800', color: colors.primary },
+  name: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.text, marginRight: 8 },
+  relationTag: { backgroundColor: colors.primarySoft, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  relationText: { fontSize: 11, fontWeight: '700', color: colors.primary },
+  sub: { fontSize: 13, color: colors.textMuted, marginTop: 3 },
 
-  actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 12, borderTopWidth: 1, borderTopColor: '#eef2f2', paddingTop: 10 },
-  confirmText: { fontSize: 13, color: '#7d1128', fontWeight: '600', marginRight: 10 },
-  editBtn: { backgroundColor: '#eef6f6', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 9, marginRight: 8 },
-  editText: { color: TEAL, fontWeight: '700', fontSize: 13 },
-  deleteBtn: { backgroundColor: '#fff3f3', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 9, marginRight: 8, borderWidth: 1, borderColor: '#f0c0c0' },
-  deleteText: { color: '#c0392b', fontWeight: '700', fontSize: 13 },
+  actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 12, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 },
+  confirmText: { fontSize: 13, color: colors.danger, fontWeight: '600', marginRight: 10 },
+  editBtn: { backgroundColor: colors.primarySoft, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9, marginRight: 8 },
+  editText: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+  deleteBtn: { backgroundColor: colors.dangerSoft, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9, marginRight: 8, borderWidth: 1, borderColor: '#FECACA' },
+  deleteText: { color: colors.danger, fontWeight: '700', fontSize: 13 },
 
-  formCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, elevation: 2 },
-  formTitle: { fontSize: 18, fontWeight: '700', color: TEAL, marginBottom: 14 },
-  field: { marginBottom: 14 },
-  label: { fontSize: 13, fontWeight: '600', color: '#5a6a6a', marginBottom: 6 },
-  input: { backgroundColor: '#f7fbfb', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#cde' },
+  formCard: { ...cardStyle, padding: 20 },
+  formTitle: { fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 16 },
+  field: { marginBottom: 16 },
+  label: { ...type.sectionLabel, fontSize: 11, marginBottom: 6 },
+  input: { backgroundColor: colors.bg, borderRadius: 12, padding: 13, borderWidth: 1, borderColor: colors.border, fontSize: 16, color: colors.text },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: '#cde', backgroundColor: '#fff' },
-  chipOn: { backgroundColor: TEAL, borderColor: TEAL },
-  chipText: { color: TEAL, fontWeight: '600' },
-  chipTextOn: { color: '#fff' },
-  error: { color: '#c0392b', fontWeight: '600', marginBottom: 10 },
+  chip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipText: { color: colors.primary, fontWeight: '600', fontSize: 13 },
+  chipTextOn: { color: colors.white },
+  error: { color: colors.danger, fontWeight: '600', fontSize: 13, backgroundColor: colors.dangerSoft, borderRadius: 10, padding: 10, marginBottom: 12, overflow: 'hidden' },
 
-  empty: { alignItems: 'center', padding: 30 },
-  emptyIcon: { fontSize: 40, marginBottom: 10 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#333' },
-  emptySub: { fontSize: 13, color: '#8a9a9a', marginTop: 4, textAlign: 'center' },
+  empty: { alignItems: 'center', paddingVertical: 36, paddingHorizontal: 24 },
+  emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.6 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textMuted },
+  emptySub: { ...type.secondary, marginTop: 4, textAlign: 'center' },
 });
