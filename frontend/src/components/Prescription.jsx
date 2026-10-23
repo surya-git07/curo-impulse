@@ -134,7 +134,7 @@ function Prescription() {
           </div>
 
           {checkingRisk && (
-            <p style={{ fontSize: '0.8rem', color: '#6b8a92' }}>Checking AMR risk...</p>
+            <p style={{ fontSize: '0.8rem', color: '#6b8a92' }}>Checking interactions...</p>
           )}
 
           {riskScore && (
@@ -145,7 +145,7 @@ function Prescription() {
               border: `1px solid ${riskScore.riskLevel === 'HIGH' ? '#f5b7b1' : '#a9dfbf'}`,
             }}>
               <strong style={{ color: riskScore.riskLevel === 'HIGH' ? '#c0392b' : '#1e8449' }}>
-                AMR Risk: {riskScore.riskLevel} ({(riskScore.riskScore * 100).toFixed(0)}%)
+                Interaction risk: {riskScore.riskLevel} ({(riskScore.riskScore * 100).toFixed(0)}%)
               </strong>
               <p style={{ margin: '0.3rem 0 0', fontSize: '0.8rem', color: '#555' }}>
                 {riskScore.explanation}

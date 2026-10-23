@@ -4,6 +4,22 @@ import { API } from './config';
 export const POLICY_VERSION = '2026-10-01';
 export const CARE_ID_RE = /^CID-[A-HJ-NP-Z2-9]{6}$/;
 
+// Indian mobile numbers: exactly 10 digits, starting 6-9. Sent to the API as typed (digits only).
+export const PHONE_RE = /^[6-9][0-9]{9}$/;
+export const PHONE_PATTERN = '^[6-9][0-9]{9}$';
+export const PHONE_MESSAGE = 'Enter a 10-digit mobile number';
+export const phoneDigits = (v) => v.replace(/\D/g, '').slice(0, 10);
+
+// Login field takes a CareID or a phone. A value that starts with a digit is a phone number.
+export const LOGIN_ID_PATTERN = '^(CID-[A-HJ-NP-Z2-9]{6}|[6-9][0-9]{9})$';
+export const isPhoneLike = (v) => /^\d/.test(v);
+export const loginIdentifier = (v) => (isPhoneLike(v) ? phoneDigits(v) : v.slice(0, 10));
+export const loginIdentifierError = (v) => {
+  if (!v) return '';
+  if (isPhoneLike(v)) return PHONE_RE.test(v) ? '' : PHONE_MESSAGE;
+  return CARE_ID_RE.test(v.toUpperCase()) ? '' : 'Enter a CareID like CID-7K3MQ9 or a 10-digit mobile number';
+};
+
 // Contract errors are { error, message }; older endpoints returned bare strings.
 export const errorMessage = (err, fallback) => {
   const d = err?.response?.data;

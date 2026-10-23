@@ -8,7 +8,7 @@
   flex-direction: column;
   align-items: center;
   padding: 8vh 1.5rem 3rem;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .mt-landing-hero {
@@ -28,7 +28,7 @@
 }
 
 .mt-landing-title {
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--font-head);
   font-size: 2.4rem;
   font-weight: 700;
   color: #F5F7FA;
@@ -65,7 +65,7 @@
   background: rgba(201, 123, 46, 0.15);
   border: 1.5px solid #C97B2E;
   color: #E8A15C;
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--font-head);
   font-size: 0.75rem;
   font-weight: 600;
   display: flex;
@@ -135,7 +135,7 @@
 
 .mt-landing-card-title {
   display: block;
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--font-head);
   color: #F5F7FA;
   font-size: 1.02rem;
   font-weight: 600;
@@ -161,3 +161,4 @@
   .mt-landing-pathway { flex-wrap: wrap; row-gap: 0.6rem; }
   .mt-landing-pathway-line { display: none; }
 }
+.mt-landing-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }

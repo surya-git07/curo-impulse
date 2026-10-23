@@ -1,25 +1,46 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Html5Qrcode } from 'html5-qrcode';
 import { decodeToken } from '../utils/jwt';
 
 import { API } from '../config';
+import { errorMessage, CARE_ID_RE } from '../api';
+import { Spinner, EmptyState, StatusBadge } from './ui';
+
+// What to tell the pharmacist for each way a lookup or a dispense can fail (codes from docs/API_CONTRACT.md).
+const lookupMessage = (e) => {
+  const status = e.response?.status;
+  const code = e.response?.data?.error;
+  if (code === 'NO_ACTIVE_GRANT') return 'No access to this patient. Ask the patient to approve access, then try again.';
+  if (status === 404) return 'Nothing found for that code or CareID. Check it and try again.';
+  if (status === 409) return code === 'ALREADY_DISPENSED' || code === 'PRESCRIPTION_DISPENSED'
+    ? 'This prescription has already been dispensed.'
+    : errorMessage(e, 'This prescription cannot be dispensed.');
+  return errorMessage(e, 'Could not look that up.');
+};
+
+const dispenseMessage = (e) => {
+  const status = e.response?.status;
+  const code = e.response?.data?.error;
+  if (status === 404) return 'That prescription no longer exists.';
+  if (status === 409 && code === 'ALREADY_DISPENSED') return 'Already dispensed. This prescription was handed out before, so it cannot be dispensed again.';
+  if (status === 409) return errorMessage(e, 'This prescription was stopped or its course has ended, so it cannot be dispensed.');
+  if (status === 403 && (code === 'WRONG_PHARMACY' || code === 'FORBIDDEN')) return 'Wrong pharmacy. You can only dispense as your own pharmacy.';
+  if (code === 'NO_ACTIVE_GRANT') return 'No access to this patient. Ask the patient to approve access, then try again.';
+  if (code === 'PHARMACY_NOT_VERIFIED') return 'Your pharmacy has not been verified yet.';
+  return errorMessage(e, 'Failed to dispense.');
+};
 
 function PharmacyPortal() {
-  const pharmacyId = decodeToken()?.facilityId;
-  const [tab, setTab] = useState('scan');
-  const [incoming, setIncoming] = useState([]);
-  const [log, setLog] = useState({ entries: [], dispensedCount: 0, rejectedCount: 0, pendingCount: 0 });
-  const [prescriptionId, setPrescriptionId] = useState('');
-  const [prescription, setPrescription] = useState(null);
+  const [code, setCode] = useState('');
+  const [careId, setCareId] = useState('');
+  const [collectedBy, setCollectedBy] = useState('');
+  const [groups, setGroups] = useState(null); // null = nothing looked up yet
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
-  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState('');
   const [now, setNow] = useState(new Date());
-  const [searchInput, setSearchInput] = useState('');
-  const [activeGroups, setActiveGroups] = useState([]);
+  const [lastLookup, setLastLookup] = useState(null);
 
-  const scannerRef = useRef(null);
   const token = sessionStorage.getItem('token');
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   const user = decodeToken();
@@ -29,142 +50,69 @@ function PharmacyPortal() {
     return () => clearInterval(clock);
   }, []);
 
-  const fetchIncoming = async () => {
-    try {
-      const r = await axios.get(`${API}/prescription/for-pharmacy/${pharmacyId}`, auth);
-      setIncoming(r.data.filter(p => p.status === 'ISSUED'));
-    } catch (e) { console.error(e); }
-  };
+  // Only ACTIVE prescriptions can be dispensed, so only those are shown.
+  const activeOnly = (list) => list
+    .map((g) => ({ ...g, drugs: (g.drugs || []).filter((d) => d.status === 'ACTIVE') }))
+    .filter((g) => g.drugs.length > 0);
 
-  const fetchLog = async () => {
+  const run = async (kind, fetcher) => {
+    setErr(''); setMsg(''); setGroups(null); setBusy(kind);
     try {
-      const r = await axios.get(`${API}/pharmacy/log/${pharmacyId}`, auth);
-      setLog(r.data);
-    } catch (e) { console.error(e); }
-  };
-
-  useEffect(() => {
-    fetchIncoming();
-  }, []);
-
-  const lookup = async (idOrQr) => {
-    setErr(''); setMsg(''); setPrescription(null); setActiveGroups([]);
-    const value = idOrQr || prescriptionId;
-    try {
-      const r = await axios.get(`${API}/prescription/group/${value}`, auth);
-      setPrescription(r.data);
-      if (idOrQr) setPrescriptionId(String(idOrQr));
-    } catch {
-      setErr('Prescription group not found.');
+      const res = await fetcher();
+      const list = Array.isArray(res.data) ? res.data : [res.data];
+      setGroups(activeOnly(list));
+      setLastLookup(kind);
+    } catch (e) {
+      setErr(lookupMessage(e));
+    } finally {
+      setBusy('');
     }
   };
 
-  const searchPrescriptions = async () => {
-    setErr(''); setMsg(''); setPrescription(null); setActiveGroups([]);
-    const value = searchInput.trim();
-    if (!value) return;
+  const byCode = (e) => {
+    e?.preventDefault();
+    const value = code.trim();
+    if (!value) { setErr('Enter the prescription code.'); return; }
+    run('code', () => axios.get(`${API}/prescription/by-qr/${encodeURIComponent(value)}`, auth));
+  };
 
-    // Numbers-only and short → treat as a Group ID
-    if (/^\d+$/.test(value) && value.length <= 5) {
-      try {
-        const r = await axios.get(`${API}/prescription/group/${value}`, auth);
-        setPrescription(r.data);
-        return;
-      } catch { /* fall through to CareID search */ }
+  const byCareId = (e) => {
+    e?.preventDefault();
+    const value = careId.trim().toUpperCase();
+    if (!CARE_ID_RE.test(value)) { setErr('A CareID looks like CID-7K3MQ9.'); return; }
+    run('careId', () => axios.get(`${API}/prescription/for-patient/${encodeURIComponent(value)}/active`, auth));
+  };
+
+  const dispense = async (rx) => {
+    setErr(''); setMsg(''); setBusy(rx.id);
+    const caregiver = collectedBy.trim().toUpperCase();
+    if (caregiver && !CARE_ID_RE.test(caregiver)) {
+      setErr('The caregiver CareID looks like CID-7K3MQ9.');
+      setBusy('');
+      return;
     }
-
-    // Otherwise treat as a CareID — list all active prescriptions for that patient
     try {
-      const r = await axios.get(`${API}/prescription/for-patient/${value}/active`, auth);
-      if (r.data.length === 0) {
-        setErr('No active prescriptions found for this CareID.');
-      } else if (r.data.length === 1) {
-        setPrescription(r.data[0]);
-      } else {
-        setActiveGroups(r.data);
-      }
-    } catch {
-      setErr('Nothing found for that ID or CareID.');
+      // The contract still requires a quantity; there is no quantity screen, so one dispense is recorded as 1.
+      await axios.post(`${API}/pharmacy/dispense`, {
+        prescriptionId: rx.id,
+        quantity: 1,
+        ...(caregiver ? { collectedByCareId: caregiver } : {}),
+      }, auth);
+      setMsg(`Dispensed ${rx.drug}${caregiver ? ` (collected by ${caregiver})` : ''}.`);
+      // drop it from the list
+      setGroups((prev) => (prev || [])
+        .map((g) => ({ ...g, drugs: g.drugs.filter((d) => d.id !== rx.id) }))
+        .filter((g) => g.drugs.length > 0));
+    } catch (e) {
+      setErr(dispenseMessage(e));
+    } finally {
+      setBusy('');
     }
   };
 
-  const dispense = async () => {
-    setErr(''); setMsg('');
-    try {
-      await axios.post(`${API}/prescription/group/${prescription.groupId}/dispense-full`, {}, auth);
-      setMsg(`Dispensed all ${prescription.drugs.length} drug(s) for ${prescription.careId}. Prescription closed.`);
-      setPrescription(null); setPrescriptionId(''); setSearchInput('');
-      fetchIncoming();
-    } catch (e) { setErr(e.response?.data || 'Failed to dispense.'); }
-  };
-
-  const startScan = async () => {
-    setErr(''); setMsg(''); setPrescription(null);
-    setScanning(true);
-    const scanner = new Html5Qrcode('qr-reader');
-    scannerRef.current = scanner;
-    try {
-      await scanner.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: 220 },
-        async (decodedText) => {
-          await scanner.stop();
-          setScanning(false);
-          setTab('lookup');
-
-          // Universal per-patient QR (CareID-based) is now the primary lookup path,
-          // matching the patient app's one-QR-per-patient design.
-          try {
-            const r = await axios.get(`${API}/prescription/for-patient/${decodedText}/active`, auth);
-            if (r.data.length === 0) {
-              setErr('No active prescriptions found for this patient.');
-            } else if (r.data.length === 1) {
-              setPrescription(r.data[0]);
-            } else {
-              setActiveGroups(r.data);
-            }
-            return;
-          } catch { /* fall through — might be a legacy single-prescription QR */ }
-
-          // Fallback for any older UUID-based QR still in circulation
-          try {
-            const r = await axios.get(`${API}/prescription/by-qr/${decodedText}`, auth);
-            setPrescription(r.data);
-          } catch {
-            setErr('Could not find a matching prescription for this QR code.');
-          }
-        },
-        () => {}
-      );
-    } catch {
-      setErr('Camera unavailable. Use manual lookup instead.');
-      setScanning(false);
-    }
-  };
-
-  const stopScan = async () => {
-    if (scannerRef.current) {
-      try { await scannerRef.current.stop(); } catch { /* ignore */ }
-    }
-    setScanning(false);
-  };
-
-  const initials = (s) => (s || '?').slice(0, 2).toUpperCase();
+  const initials = (s) => (s || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase();
   const timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   const dateStrShort = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-  const navItems = [
-    { key: 'scan', label: 'Scan QR' },
-    { key: 'lookup', label: 'Lookup' },
-    { key: 'incoming', label: 'Incoming Rx' },
-    { key: 'log', label: 'Log' },
-  ];
-
-  const goTab = (t) => {
-    setTab(t);
-    if (t === 'incoming') fetchIncoming();
-    if (t === 'log') fetchLog();
-  };
 
   return (
     <div className="mt-shell">
@@ -173,15 +121,7 @@ function PharmacyPortal() {
         <div className="mt-sidebar-sub">{user?.username}</div>
 
         <div className="mt-sidebar-nav">
-          {navItems.map(item => (
-            <button
-              key={item.key}
-              className={`mt-sidebar-item ${tab === item.key ? 'active' : ''}`}
-              onClick={() => goTab(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
+          <button className="mt-sidebar-item active">Dispense</button>
         </div>
 
         <div className="mt-sidebar-footer">
@@ -197,157 +137,90 @@ function PharmacyPortal() {
 
       <div className="mt-main">
         <div className="mt-page">
-          {tab === 'scan' && (
-            <div className="mt-card" style={{ textAlign: 'center' }}>
-              <div className="mt-card-title" style={{ justifyContent: 'center' }}>Scan patient's QR code</div>
-              <div id="qr-reader" style={{ maxWidth: 280, margin: '0 auto 10px' }} />
-              {!scanning ? (
-                <button className="mt-btn mt-btn-orange" onClick={startScan}>Start camera</button>
-              ) : (
-                <button className="mt-btn mt-btn-outline" onClick={stopScan}>Stop</button>
-              )}
-              {err && <div className="alert-box alert-red" style={{ marginTop: 10, textAlign: 'left' }}>{String(err)}</div>}
-              <p style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8 }}>
-                No camera? Use the Lookup tab with the prescription ID.
-              </p>
-            </div>
-          )}
+          <div className="mt-card">
+            <div className="mt-card-title">Find the prescription</div>
 
-          {tab === 'lookup' && (
-            <div className="mt-card">
-              <div className="mt-card-title">Lookup prescription</div>
-              <label className="mt-label">Group ID or Patient CareID</label>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+            <form onSubmit={byCode} style={{ marginBottom: 12 }}>
+              <label className="mt-label">Prescription code (from the patient's QR)</label>
+              <div style={{ display: 'flex', gap: 8 }}>
                 <input
                   className="mt-input"
                   style={{ flex: 1 }}
-                  placeholder="e.g. 49 or 12345671234567"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Type or paste the code under the QR"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
                 />
-                <button className="mt-btn mt-btn-orange" onClick={searchPrescriptions}>Search</button>
-              </div>
-              {err && <div className="alert-box alert-red">{String(err)}</div>}
-              {msg && <div className="alert-box alert-green">{msg}</div>}
-
-              {activeGroups.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <div className="mt-label" style={{ marginBottom: 6 }}>Multiple active prescriptions found — select one</div>
-                  {activeGroups.map(g => (
-                    <div key={g.groupId} className="prow" style={{ cursor: 'pointer' }} onClick={() => { setPrescription(g); setActiveGroups([]); }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>Group #{g.groupId} — {g.drugs.length} drug(s)</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                          {g.drugs.map(d => d.drug).join(', ')} · {g.issuedAt ? new Date(g.issuedAt).toLocaleDateString() : ''}
-                        </div>
-                      </div>
-                      <span className="badge badge-blue">ISSUED</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {prescription && (
-                <div className="mt-card" style={{
-                  background: 'var(--c-green-bg)',
-                  border: '1px solid #5DCAA5',
-                  padding: 14,
-                }}>
-                  <div style={{ textAlign: 'center', marginBottom: 10 }}>
-                    <div style={{ fontSize: 26 }}>🛡️</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-green-dark)', marginTop: 4, fontFamily: "'Space Grotesk', sans-serif" }}>
-                      Verified — valid prescription
-                    </div>
-                    <div style={{ fontSize: 10, color: '#3B6D11', marginTop: 2 }}>Status: {prescription.status}</div>
-                  </div>
-
-                  <div style={{ height: 1, background: 'rgba(0,0,0,0.06)', margin: '10px 0' }} />
-
-                  <div style={{ marginBottom: 12 }}>
-                    <div className="mt-label">Patient</div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{prescription.careId}</div>
-                  </div>
-
-                  <div className="mt-label" style={{ marginBottom: 6 }}>Drugs in this prescription</div>
-                  {prescription.drugs.map(d => (
-                    <div key={d.id} style={{
-                      background: '#fff',
-                      borderRadius: 8,
-                      padding: '8px 10px',
-                      marginBottom: 6,
-                    }}>
-                      <strong style={{ fontSize: 12 }}>{d.drug}</strong>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{d.dose} · {d.duration}</div>
-                    </div>
-                  ))}
-
-                  <button
-                    className="mt-btn mt-btn-green"
-                    style={{ width: '100%', marginTop: 8 }}
-                    onClick={dispense}
-                    disabled={prescription.status !== 'ISSUED'}
-                  >
-                    Confirm — dispense all drugs
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {tab === 'incoming' && (
-            <div className="mt-card">
-              <div className="mt-card-title">Prescriptions routed to this pharmacy</div>
-              {incoming.length === 0 ? (
-                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>No pending prescriptions.</p>
-              ) : incoming.map(p => (
-                <div key={p.id} className="prow" style={{ cursor: 'pointer' }} onClick={() => { setTab('lookup'); lookup(p.id); }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600 }}>#{p.id} — {p.drug}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.careId} · {p.dose}</div>
-                  </div>
-                  <span className="badge badge-blue">ISSUED</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {tab === 'log' && (
-            <div className="mt-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div className="mt-card-title" style={{ marginBottom: 0 }}>Dispensing log</div>
-                <button className="mt-btn mt-btn-outline" style={{ fontSize: 10, padding: '4px 10px' }} onClick={fetchLog}>
-                  ↻ Refresh
+                <button className="mt-btn mt-btn-orange" type="submit" disabled={busy === 'code'}>
+                  {busy === 'code' ? <><Spinner /> Looking…</> : 'Find'}
                 </button>
               </div>
+            </form>
 
-              <div className="stat-grid">
-                <div className="stat-box">
-                  <div className="stat-num" style={{ color: 'var(--c-green)' }}>{log.dispensedCount}</div>
-                  <div className="stat-label">Dispensed</div>
-                </div>
-                <div className="stat-box">
-                  <div className="stat-num" style={{ color: 'var(--c-red)' }}>{log.rejectedCount}</div>
-                  <div className="stat-label">Rejected</div>
-                </div>
-                <div className="stat-box">
-                  <div className="stat-num" style={{ color: 'var(--c-amber-dark)' }}>{log.pendingCount}</div>
-                  <div className="stat-label">Pending</div>
-                </div>
+            <form onSubmit={byCareId}>
+              <label className="mt-label">Patient CareID</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="mt-input"
+                  style={{ flex: 1 }}
+                  placeholder="e.g. CID-7K3MQ9"
+                  value={careId}
+                  onChange={(e) => setCareId(e.target.value)}
+                />
+                <button className="mt-btn mt-btn-orange" type="submit" disabled={busy === 'careId'}>
+                  {busy === 'careId' ? <><Spinner /> Looking…</> : 'Find'}
+                </button>
               </div>
+            </form>
 
-              {log.entries?.length === 0 ? (
-                <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem 0' }}>No activity yet.</p>
-              ) : log.entries?.map(entry => (
-                <div key={entry.id} className="prow">
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600 }}>{entry.drug} {entry.careId ? `— ${entry.careId}` : ''}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                      {entry.status === 'DISPENSED' ? `Qty: ${entry.qtyDispensed}` : entry.rejectReason} · {entry.dispensedAt ? new Date(entry.dispensedAt).toLocaleString() : ''}
-                    </div>
+            <div style={{ marginTop: 12 }}>
+              <label className="mt-label">Collected by caregiver CareID (optional)</label>
+              <input
+                className="mt-input"
+                placeholder="Leave empty if the patient collects"
+                value={collectedBy}
+                onChange={(e) => setCollectedBy(e.target.value)}
+              />
+            </div>
+
+            {err && <div className="alert-box alert-red" role="alert" style={{ marginTop: 12 }}>{String(err)}</div>}
+            {msg && <div className="alert-box alert-green" style={{ marginTop: 12 }}>{msg}</div>}
+          </div>
+
+          {busy === 'code' || busy === 'careId' ? (
+            <div className="mt-card"><div className="loading-row"><Spinner large /> <span>Looking up prescriptions…</span></div></div>
+          ) : null}
+
+          {groups && (
+            <div className="mt-card">
+              <div className="mt-card-title">Active prescriptions</div>
+              {groups.length === 0 ? (
+                <EmptyState
+                  icon="✓"
+                  title={lastLookup === 'code' ? 'Nothing left to dispense' : 'No active prescriptions'}
+                  text={lastLookup === 'code' ? 'Every medicine on this prescription has been handed out.' : 'This patient has nothing waiting at the pharmacy.'}
+                />
+              ) : groups.map((g) => (
+                <div key={g.groupId || g.id || g.drugs[0].id} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                    {g.careId}{g.issuedAt ? ` · issued ${new Date(g.issuedAt).toLocaleDateString()}` : ''}
                   </div>
-                  <span className={`badge ${entry.status === 'DISPENSED' ? 'badge-green' : 'badge-red'}`}>
-                    {entry.status === 'DISPENSED' ? 'Done' : 'Rejected'}
-                  </span>
+                  {g.drugs.map((d) => (
+                    <div key={d.id} className="prow">
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>{d.drug}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{[d.dose, d.duration].filter(Boolean).join(' · ')}</div>
+                      </div>
+                      <StatusBadge status="ACTIVE" />
+                      <button
+                        className="mt-btn mt-btn-green"
+                        style={{ marginLeft: 8 }}
+                        onClick={() => dispense(d)}
+                        disabled={busy === d.id}
+                      >
+                        {busy === d.id ? <><Spinner /> Dispensing…</> : 'Dispense'}
+                      </button>
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>

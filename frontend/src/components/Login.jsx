@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { login, errorMessage } from '../api';
+import { login, errorMessage, LOGIN_ID_PATTERN, loginIdentifier, loginIdentifierError } from '../api';
 import './Login.css';
 import { useNavigate } from 'react-router-dom';
 function Login() {
     const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
+  const [idTouched, setIdTouched] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -13,6 +14,10 @@ function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (loginIdentifierError(identifier)) {
+      setIdTouched(true);
+      return;
+    }
     setLoading(true);
 
     try {
@@ -41,12 +46,12 @@ setTimeout(() => {
           <div className="welcome-panel">
             <div className="welcome-badge">✓</div>
 <h2>You're signed in,<br />{loggedInUser.name}</h2>
-<p>{loggedInUser.facilityName} · Access to AMR-PVMS is now active.</p>
+<p>{loggedInUser.facilityName} · Your Curo session is active.</p>
 <span className="role-badge">{loggedInUser.role}</span>
           </div>
           <div className="form-panel">
             <h1>Session active</h1>
-            <p className="subtitle">Welcome to the AMR Prescription Validation &amp; Monitoring System.</p>
+            <p className="subtitle">Welcome to Curo.</p>
           </div>
         </div>
       </div>
@@ -58,10 +63,10 @@ setTimeout(() => {
       <div className="login-shell">
         <div className="welcome-panel">
           <div className="welcome-badge">+</div>
-          <h2>Welcome to<br />AMR-PVMS</h2>
+          <h2>Welcome to<br />Curo</h2>
           <p>
-            A unified platform for antimicrobial resistance monitoring,
-            secure prescription validation, and hospital-pharmacy coordination.
+            A shared platform for medication coordination,
+            secure prescriptions, and hospital-pharmacy handover.
           </p>
           <div className="welcome-stats">
             <div>
@@ -89,11 +94,17 @@ setTimeout(() => {
               <input
                 id="identifier"
                 type="text"
-                placeholder="CID-XXXXXX or phone number"
+                placeholder="CID-XXXXXX or 10-digit mobile number"
                 value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
+                maxLength={10}
+                pattern={LOGIN_ID_PATTERN}
+                onChange={(e) => setIdentifier(loginIdentifier(e.target.value))}
+                onBlur={() => setIdTouched(true)}
                 required
               />
+              {idTouched && loginIdentifierError(identifier) && (
+                <p className="error" role="alert" style={{ marginTop: '0.4rem' }}>{loginIdentifierError(identifier)}</p>
+              )}
             </div>
             <div className="field-group">
               <label htmlFor="password">Password</label>

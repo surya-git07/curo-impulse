@@ -95,4 +95,17 @@ class AuthMeSecurityTest {
     void otherAuthPathsAreNotPublic() throws Exception {
         assertThat(mvc.perform(get("/auth/anything")).andReturn().getResponse().getStatus()).isIn(401, 403);
     }
+
+    @Test
+    void accountReviewRoutesAreForTheSuperAdminOnly() throws Exception {
+        assertThat(mvc.perform(get("/admin/users")).andReturn().getResponse().getStatus()).isIn(401, 403);
+        assertThat(mvc.perform(post("/admin/users/u1/verify")).andReturn().getResponse().getStatus()).isIn(401, 403);
+        for (String role : new String[]{"ADMIN", "DOCTOR", "PHARMACY", "PATIENT", "CAREGIVER"}) {
+            String token = jwtService.generateToken("x-" + role, role, "CID-7K3MQ9", null);
+            assertThat(mvc.perform(get("/admin/users").header("Authorization", "Bearer " + token)).andReturn().getResponse().getStatus())
+                    .as(role).isEqualTo(403);
+            assertThat(mvc.perform(post("/admin/users/u1/reject").header("Authorization", "Bearer " + token)).andReturn().getResponse().getStatus())
+                    .as(role).isEqualTo(403);
+        }
+    }
 }

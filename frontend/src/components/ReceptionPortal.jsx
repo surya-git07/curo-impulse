@@ -4,6 +4,7 @@ import TopBar from './TopBar';
 import { decodeToken } from '../utils/jwt';
 import { API } from '../config';
 import { CARE_ID_RE, errorMessage } from '../api';
+import { EmptyState, StatusBadge } from './ui';
 
 function ReceptionPortal() {
   const [careId, setCareId] = useState('');
@@ -124,7 +125,7 @@ const doctorNameFor = (doctorId) => {
             <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
               Welcome, {displayName}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{dateStr}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{dateStr}</div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", color: 'var(--c-amber-dark)' }}>
@@ -132,7 +133,7 @@ const doctorNameFor = (doctorId) => {
             </div>
             <button
               className="mt-btn mt-btn-outline"
-              style={{ fontSize: 10, padding: '4px 10px', marginTop: 4 }}
+              style={{ fontSize: 11, padding: '4px 10px', marginTop: 4 }}
               onClick={refresh}
               disabled={refreshing}
             >
@@ -154,7 +155,7 @@ const doctorNameFor = (doctorId) => {
                 </button>
               </div>
 
-              {err && <div className="alert-box alert-red">{String(err)}</div>}
+              {err && <div className="alert-box alert-red" role="alert">{String(err)}</div>}
               {msg && <div className="alert-box alert-green">{msg}</div>}
 
               {verified && (
@@ -215,16 +216,16 @@ const doctorNameFor = (doctorId) => {
             <div className="mt-card">
               <div className="mt-card-title">👨‍⚕️ Doctor availability</div>
               {doctors.length === 0 ? (
-                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>No doctors found.</p>
+                <EmptyState icon="🩺" title="No doctors found" text="Doctors who sign up for this hospital will show here." />
               ) : doctors.map(d => (
                 <div key={d.id} className="prow">
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>{drName(d.name)}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                       {d.specialization || 'General'}
                        {!d.available && d.substituteName && ` · Substitute: ${drName(d.substituteName)}`}                    </div>
                   </div>
-                  <span className={`badge ${d.available ? 'badge-green' : 'badge-red'}`}>
+                  <span className={`badge ${d.available ? 'badge-green' : 'badge-orange'}`}>
                     {d.available ? 'Available' : 'On leave'}
                   </span>
                 </div>
@@ -236,16 +237,16 @@ const doctorNameFor = (doctorId) => {
         <div className="mt-card">
           <div className="mt-card-title">🧑‍🤝‍🧑 Patients checked in today ({queue.length})</div>
           {queue.length === 0 ? (
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '1rem 0' }}>No patients checked in yet.</p>
+            <EmptyState icon="🧑‍🤝‍🧑" title="No patients checked in yet" text="Enter a CareID on the left to check someone in." />
           ) : queue.map(v => (
             <div key={v.id} className="prow">
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, fontWeight: 600 }}>{v.careId}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                   Seeing Dr. {doctorNameFor(v.doctorId)} · Checked in {v.checkedInAt ? new Date(v.checkedInAt).toLocaleTimeString() : ''}
                 </div>
               </div>
-              <span className={`badge ${v.status === 'WAITING' ? 'badge-gray' : 'badge-green'}`}>{v.status}</span>
+              <StatusBadge status={v.status} />
             </div>
           ))}
         </div>

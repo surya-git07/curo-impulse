@@ -1,6 +1,9 @@
 package com.curo.curo_backend.repository;
 
 import com.curo.curo_backend.model.AppUser;
+import com.curo.curo_backend.model.VerificationStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.util.Optional;
@@ -12,4 +15,5 @@ public interface UserRepository extends MongoRepository<AppUser, String> {
     boolean existsByPhone(String phone);
     boolean existsByLicenceNumber(String licenceNumber);
     boolean existsByDrugLicenceNumber(String drugLicenceNumber);
+    Page<AppUser> findByVerificationStatusAndDeletedAtIsNull(VerificationStatus status, Pageable pageable);
 }

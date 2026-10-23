@@ -36,10 +36,10 @@ class LicenceRegistrySeederTest {
     }
 
     @Test
-    void insertsAllFifteenIntoAnEmptyCollection() {
+    void insertsEveryEntryIntoAnEmptyCollection() {
         seeder.run(null);
 
-        verify(repo, times(15)).save(any(LicenceRegistryEntry.class));
+        verify(repo, times(LicenceRegistrySeed.entries().size())).save(any(LicenceRegistryEntry.class));
     }
 
     @Test

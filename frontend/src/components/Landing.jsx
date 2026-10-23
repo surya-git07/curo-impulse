@@ -53,13 +53,13 @@ function Landing() {
   return (
     <div className="mt-landing">
       <div className="mt-landing-hero">
-        <span className="mt-landing-eyebrow">Antimicrobial Resistance · Prescription Traceability</span>
+        <span className="mt-landing-eyebrow">Patient and doctor medication coordination</span>
         <h1 className="mt-landing-title">
           Every prescription,<br />traced end to end.
         </h1>
         <p className="mt-landing-subtitle">
-          MedTrace connects reception, doctors, and pharmacies on one verified record —
-          so no antibiotic gets prescribed twice without anyone knowing.
+          Curo connects reception, doctors, pharmacies and patients on one verified record,
+          so every medicine is prescribed, dispensed and taken with everyone in the loop.
         </p>
 
         <div className="mt-landing-pathway" aria-hidden="true">
@@ -97,7 +97,7 @@ function Landing() {
         ))}
       </div>
 
-      <p className="mt-landing-footer">MedTrace · Built for AMR-PVMS</p>
+      <p className="mt-landing-footer">Curo · IMPULSE 26</p>
     </div>
   );
 }

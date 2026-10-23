@@ -93,6 +93,7 @@ public class SecurityConfig {
                         .requestMatchers("/pharmacy/**").hasAnyRole("PHARMACY", "ADMIN")
                         .requestMatchers("/ai/**").hasAnyRole("DOCTOR", "ADMIN")
                         .requestMatchers("/staff/**").hasAnyRole("RECEPTION", "DOCTOR", "ADMIN")
+                        .requestMatchers("/admin/users", "/admin/users/**").hasRole("SUPER_ADMIN")
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         .requestMatchers("/doctor/leave/**").hasRole("DOCTOR")
                         .requestMatchers("/doctor/profile").hasRole("DOCTOR")

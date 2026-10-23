@@ -6,9 +6,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Mock licence registry contents: 10 doctors and 5 pharmacies, all invented. Names, numbers and GSTINs
+ * Mock licence registry contents: 13 doctors, 3 clinics, 3 hospitals and 8 pharmacies, all invented. Names, numbers and GSTINs
  * do not belong to real people or businesses; any resemblance is coincidence. Numbers follow plausible
- * formats only. Every GSTIN carries a correct check character so it passes GstinValidator.
+ * formats only. Every GSTIN carries a correct check character and matches the entry's state, so it passes GstinValidator.
+ * Doctors hold no GSTIN. Clinic and hospital entries are for facility verification, which is not wired to signup yet.
  */
 public final class LicenceRegistrySeed {
 
@@ -35,7 +36,33 @@ public final class LicenceRegistrySeed {
         all.add(pharmacy("KL/EKM/20B-18764", "Periyar Health Medicals", "32AAIFP1876M1ZV", "KL"));
         all.add(pharmacy("DL/20B-5102/2021", "Yamuna Wellness Pharmacy", "07AAJCY5102G1ZE", "DL"));
 
+        all.add(doctor("GMC-G-52871", "Hetal Chauhan", "Gujarat Medical Council", "GJ"));
+        all.add(doctor("WBMC-S-31406", "Arindam Bhattacharjee", "West Bengal Medical Council", "WB"));
+        all.add(doctor("TN-72450", "Meenakshi Rajagopalan", "Tamil Nadu Medical Council", "TN"));
+
+        all.add(facility(LicenceRegistryEntry.CLINIC, "TN-CL-20417", "Sundaram Family Clinic", "33AAGCS6120M1ZB", "TN"));
+        all.add(facility(LicenceRegistryEntry.CLINIC, "KA-CL-55302", "Banashankari Care Clinic", "29AAHFB3345K1Z9", "KA"));
+        all.add(facility(LicenceRegistryEntry.CLINIC, "MH-CL-80914", "Mulund Wellness Clinic", "27AAJCM8810P1ZS", "MH"));
+
+        all.add(facility(LicenceRegistryEntry.HOSPITAL, "KL-HOSP-31182", "Kochi Lakeshore Hospital", "32AAKCK5507R1Z2", "KL"));
+        all.add(facility(LicenceRegistryEntry.HOSPITAL, "DL-HOSP-60275", "Dwarka Central Hospital", "07AALCD7714B1ZT", "DL"));
+        all.add(facility(LicenceRegistryEntry.HOSPITAL, "TG-HOSP-44961", "Tarnaka General Hospital", "36AAMCT2209H1ZB", "TG"));
+
+        all.add(pharmacy("GJ/GNR/20B-40962", "Gandhinagar Jan Medicals", "24AANCG4096E1ZH", "GJ"));
+        all.add(pharmacy("WB/KOL/20B-66218", "Eastern Ganga Pharmacy", "19AAPCE6633J1Z2", "WB"));
+        all.add(pharmacy("TN/TRI/20B-51094", "Tiruchi Arogya Pharmacy", "33AAQCT1180L1Z0", "TN"));
+
         return all;
+    }
+
+    private static LicenceRegistryEntry facility(String type, String licenceNumber, String name, String gstin, String state) {
+        LicenceRegistryEntry e = new LicenceRegistryEntry();
+        e.setType(type);
+        e.setLicenceNumber(licenceNumber);
+        e.setName(name);
+        e.setGstin(gstin);
+        e.setState(state);
+        return e;
     }
 
     private static LicenceRegistryEntry doctor(String licenceNumber, String name, String stateCouncil, String state) {

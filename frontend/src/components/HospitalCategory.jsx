@@ -18,7 +18,7 @@ function HospitalCategory() {
       minHeight: '100vh',
       padding: '1.5rem',
     }}>
-      <div className="page-brand">MedTrace</div>
+      <div className="page-brand">Curo</div>
 
       <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
         <h1 style={{ fontSize: '1.7rem', marginBottom: '0.5rem' }}>Hospital</h1>

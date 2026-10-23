@@ -17,17 +17,29 @@ class LicenceRegistrySeedTest {
     private final List<LicenceRegistryEntry> all = LicenceRegistrySeed.entries();
     private final List<LicenceRegistryEntry> doctors = all.stream().filter(e -> LicenceRegistryEntry.DOCTOR.equals(e.getType())).toList();
     private final List<LicenceRegistryEntry> pharmacies = all.stream().filter(e -> LicenceRegistryEntry.PHARMACY.equals(e.getType())).toList();
+    private final List<LicenceRegistryEntry> clinics = all.stream().filter(e -> LicenceRegistryEntry.CLINIC.equals(e.getType())).toList();
+    private final List<LicenceRegistryEntry> hospitals = all.stream().filter(e -> LicenceRegistryEntry.HOSPITAL.equals(e.getType())).toList();
 
     @Test
-    void hasTenDoctorsAndFivePharmacies() {
-        assertThat(doctors).hasSize(10);
-        assertThat(pharmacies).hasSize(5);
-        assertThat(all).hasSize(15);
+    void hasTheExpectedNumberOfEntriesPerType() {
+        assertThat(doctors).hasSize(13);
+        assertThat(clinics).hasSize(3);
+        assertThat(hospitals).hasSize(3);
+        assertThat(pharmacies).hasSize(8);
+        assertThat(all).hasSize(27);
+    }
+
+    @Test
+    void clinicsAndHospitalsHaveGstinsMatchingTheirState() {
+        for (LicenceRegistryEntry f : java.util.stream.Stream.concat(clinics.stream(), hospitals.stream()).toList()) {
+            assertThat(LicenceNumbers.isValidDrugLicenceNumber(f.getLicenceNumber())).as(f.getLicenceNumber()).isTrue();
+            assertThat(GstinValidator.validate(f.getGstin(), f.getState())).as(f.getGstin()).isEqualTo(GstinValidator.Result.VALID);
+        }
     }
 
     @Test
     void licenceNumbersAreUniquePerTypeAndAlreadyNormalised() {
-        for (List<LicenceRegistryEntry> group : List.of(doctors, pharmacies)) {
+        for (List<LicenceRegistryEntry> group : List.of(doctors, pharmacies, clinics, hospitals)) {
             Set<String> numbers = group.stream().map(LicenceRegistryEntry::getLicenceNumber).collect(Collectors.toSet());
             assertThat(numbers).hasSameSizeAs(group);
             group.forEach(e -> assertThat(e.getLicenceNumber()).isEqualTo(LicenceNumbers.normalize(e.getLicenceNumber())));
@@ -63,7 +75,7 @@ class LicenceRegistrySeedTest {
 
     @Test
     void namesAreDistinct() {
-        assertThat(all.stream().map(LicenceRegistryEntry::getName).collect(Collectors.toSet())).hasSize(15);
+        assertThat(all.stream().map(LicenceRegistryEntry::getName).collect(Collectors.toSet())).hasSize(27);
     }
 
     @Test

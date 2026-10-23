@@ -4,6 +4,15 @@ import { decodeToken } from '../utils/jwt';
 
 import { API } from '../config';
 import { errorMessage } from '../api';
+import RxQrCode from './RxQrCode';
+import { Loading, EmptyState, StatusBadge, SeverityCard, AllergyCard } from './ui';
+
+const FREQUENCY_CODE = {
+  'Once daily': 'ONCE_DAILY',
+  'Twice daily': 'TWICE_DAILY',
+  'Three times daily': 'THREE_TIMES_DAILY',
+  'Four times daily': 'FOUR_TIMES_DAILY',
+};
 
 const buildHistoryStats = (history) => {
   const now = new Date();
@@ -33,8 +42,12 @@ function DoctorPortal() {
   const [selectedCareId, setSelectedCareId] = useState(null);
   const [summary, setSummary] = useState(null);
   const [history, setHistory] = useState([]);
-  const [conflicts, setConflicts] = useState([]);
+  const [meds, setMeds] = useState([]);
   const [grantErr, setGrantErr] = useState('');
+  const [shareCode, setShareCode] = useState('');
+  const [accessMsg, setAccessMsg] = useState('');
+  const [accessErr, setAccessErr] = useState('');
+  const [accessBusy, setAccessBusy] = useState(false);
   const [drugs, setDrugs] = useState([]);
   const [issued, setIssued] = useState([]);
   const [extendTarget, setExtendTarget] = useState(null);
@@ -46,7 +59,7 @@ function DoctorPortal() {
 const [rxDrugs, setRxDrugs] = useState([{ drug: '', strength: '', frequency: '', duration: '', risk: null }]);
   const [rxMsg, setRxMsg] = useState('');
   const [rxErr, setRxErr] = useState('');
-  const [rxBlocked, setRxBlocked] = useState(false);
+  const [rxWarnings, setRxWarnings] = useState([]);
   const [issuedQr, setIssuedQr] = useState(null);
   const [refreshingQueue, setRefreshingQueue] = useState(false);
   const [refreshingIssued, setRefreshingIssued] = useState(false);
@@ -137,30 +150,64 @@ const fetchProfile = async () => {
     setTimeout(() => setRefreshingIssued(false), 400);
   };
 
+  const noGrant = (e) => e.response?.status === 403 && e.response?.data?.error === 'NO_ACTIVE_GRANT';
+  const NO_GRANT_TEXT = 'No active access to this patient (NO_ACTIVE_GRANT). Ask the patient for a share code and enter it on the Queue tab, or request access first.';
+
   const openPatient = async (careId) => {
     setSelectedCareId(careId);
     setSummary(null);
     setHistory([]);
-    setConflicts([]);
+    setMeds([]);
     setGrantErr('');
     setPatientView('main');
     setTab('patient');
+    let denied = false;
+    const enc = encodeURIComponent(careId);
     try {
-      const s = await axios.get(`${API}/patient/${encodeURIComponent(careId)}/summary`, auth);
+      const s = await axios.get(`${API}/patient/${enc}/summary`, auth);
       setSummary(s.data);
     } catch (e) {
-      if (e.response?.data?.error === 'NO_ACTIVE_GRANT') {
-        setGrantErr('No active access grant for this CareID. Ask the patient for a share code or request access first.');
-      } else console.error(e);
+      if (noGrant(e)) denied = true; else console.error(e);
     }
     try {
-      const h = await axios.get(`${API}/prescription/patient/${encodeURIComponent(careId)}`, auth);
-      setHistory(h.data);
-    } catch (e) { console.error(e); }
+      const m = await axios.get(`${API}/patient/${enc}/medications`, auth);
+      setMeds(m.data.medications || []);
+      // allergies also come with the profile; use them if the summary was not readable
+      setSummary((prev) => prev || (m.data.allergies ? { careId, allergies: m.data.allergies } : prev));
+    } catch (e) {
+      if (noGrant(e)) denied = true; else console.error(e);
+    }
     try {
-      const c = await axios.get(`${API}/prescription/active-conflicts/${encodeURIComponent(careId)}`, auth);
-      setConflicts(c.data);
-    } catch (e) { console.error(e); }
+      const h = await axios.get(`${API}/patient/${enc}/history`, auth);
+      setHistory(h.data);
+    } catch (e) {
+      if (noGrant(e)) denied = true; else console.error(e);
+    }
+    if (denied) setGrantErr(NO_GRANT_TEXT);
+  };
+
+  // The patient shows a 6-digit code; entering it creates the access grant straight away.
+  const redeemShareCode = async (e) => {
+    e.preventDefault();
+    setAccessMsg(''); setAccessErr('');
+    const value = shareCode.trim();
+    if (!/^\d{6}$/.test(value)) { setAccessErr('The share code is 6 digits.'); return; }
+    setAccessBusy(true);
+    try {
+      const res = await axios.post(`${API}/access-grants`, { shareCode: value, reason: 'Consultation' }, auth);
+      setShareCode('');
+      setAccessMsg(`Access granted for ${res.data.careId}.`);
+      openPatient(res.data.careId);
+    } catch (err) {
+      const code = err.response?.data?.error;
+      if (code === 'INVALID_SHARE_CODE') setAccessErr('That code is not valid, or it was already used. Ask the patient for a new one.');
+      else if (code === 'SHARE_CODE_EXPIRED') setAccessErr('That code has expired. Ask the patient for a new one.');
+      else if (code === 'TOO_MANY_ATTEMPTS') setAccessErr('Too many wrong codes. Wait a few minutes and try again.');
+      else if (code === 'GRANT_EXISTS') setAccessErr('You already have access to this patient. Open them from the queue.');
+      else setAccessErr(errorMessage(err, 'Could not use that code.'));
+    } finally {
+      setAccessBusy(false);
+    }
   };
 
   const removeVisit = async (id) => {
@@ -184,7 +231,7 @@ const fetchProfile = async () => {
       await axios.post(`${API}/prescription/group/${groupId}/recall`, {}, auth);
       fetchIssued();
     } catch (e) {
-      alert(e.response?.data || 'Failed to recall.');
+      alert(errorMessage(e, 'Failed to recall.'));
     }
   };
 
@@ -196,31 +243,34 @@ const fetchProfile = async () => {
 
   const issueRx = async (e) => {
     e.preventDefault();
-    setRxMsg(''); setRxErr(''); setRxBlocked(false); setIssuedQr(null);
+    setRxMsg(''); setRxErr(''); setRxWarnings([]); setIssuedQr(null);
 
-const validDrugs = rxDrugs.filter(d => d.drug && d.strength && d.frequency && d.duration);
-if (validDrugs.length === 0) {
-  setRxErr('Add at least one drug with strength, frequency, and duration.');
-  return;
-}
+    const validDrugs = rxDrugs.filter(d => d.drug && d.strength && d.frequency && d.duration);
+    if (validDrugs.length === 0) {
+      setRxErr('Add at least one drug with strength, frequency, and duration.');
+      return;
+    }
 
-try {
- const res = await axios.post(`${API}/prescription/issue`, {
-   careId: selectedCareId,
-   drugs: validDrugs.map(d => ({ drug: d.drug, dose: `${d.strength} ${d.frequency.toLowerCase()}`, duration: d.duration })),
-  }, auth);
-      setRxMsg(`Issued — Prescription Group ID: ${res.data.groupId} (${res.data.drugs.length} drug${res.data.drugs.length > 1 ? 's' : ''})`);
-      setIssuedQr(res.data.qrCode);
+    try {
+      const res = await axios.post(`${API}/prescription/issue`, {
+        careId: selectedCareId,
+        drugs: validDrugs.map(d => ({
+          drug: d.drug,
+          dose: d.strength,
+          duration: d.duration,
+          ...(FREQUENCY_CODE[d.frequency] ? { frequency: FREQUENCY_CODE[d.frequency] } : {}),
+        })),
+      }, auth);
+      const n = res.data.drugs.length;
+      setRxMsg(`Issued ${n} drug${n > 1 ? 's' : ''} for ${selectedCareId}.`);
+      setRxWarnings(res.data.warnings || []);
+      setIssuedQr({ code: res.data.qrCode || null });
       setRxDrugs([{ drug: '', strength: '', frequency: '', duration: '', risk: null }]);
       fetchQueue();
       fetchIssued();
     } catch (err) {
-      if (err.response?.status === 409) {
-        setRxBlocked(true);
-        setRxErr(errorMessage(err, 'Prescription conflict.'));
-      } else {
-        setRxErr(errorMessage(err, 'Failed to issue prescription.'));
-      }
+      if (noGrant(err)) setRxErr(NO_GRANT_TEXT);
+      else setRxErr(errorMessage(err, 'Failed to issue prescription.'));
     }
   };
 
@@ -236,7 +286,7 @@ try {
       setExtendTarget(null);
       fetchIssued();
     } catch (e) {
-      alert(e.response?.data || 'Failed to extend.');
+      alert(errorMessage(e, 'Failed to extend.'));
     }
   };
 
@@ -268,7 +318,7 @@ try {
       await axios.post(`${API}/doctor/leave/${myLeave.id}/end`, {}, auth);
       fetchMyLeave();
     } catch (e) {
-      alert(e.response?.data || 'Failed to end leave.');
+      alert(errorMessage(e, 'Failed to end leave.'));
     }
   };
 
@@ -286,19 +336,23 @@ const addDrugRow = () => {
     setRxDrugs(updated);
   };
 
-  const checkRiskForRow = async (index, drugName, duration) => {
+  const checkRiskForRow = async (index, drugName, strength, duration) => {
     if (!drugName) return;
+    const days = /^\s*(\d+)\s*d(ays?)?\s*$/i.exec(duration || '');
     try {
-      const res = await axios.post(`${API}/ai/risk-score`, {
-        drug: drugName,
+      const res = await axios.post(`${API}/checks/interaction`, {
         careId: selectedCareId,
-        duration: duration,
-        allergies: Array.isArray(summary?.allergies) ? summary.allergies.join(', ') : (summary?.allergies || 'None'),
+        drug: drugName,
+        ...(strength ? { dose: strength } : {}),
+        ...(days ? { durationDays: Number(days[1]) } : {}),
       }, auth);
-      const updated = [...rxDrugs];
-      updated[index].risk = res.data;
-      setRxDrugs(updated);
-    } catch (e) { console.error(e); }
+      setRxDrugs((prev) => prev.map((r, i) => (i === index ? { ...r, risk: res.data } : r)));
+    } catch (e) {
+      const msg = noGrant(e) ? NO_GRANT_TEXT : errorMessage(e, 'The interaction check could not run. Verify manually.');
+      setRxDrugs((prev) => prev.map((r, i) => (i === index
+        ? { ...r, risk: { severity: 'UNKNOWN', warning: msg, explanation: null } }
+        : r)));
+    }
   };
 
   const initials = (s) => (s || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase();
@@ -306,14 +360,8 @@ const addDrugRow = () => {
   const timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   const dateStrShort = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-  const hasRealAllergies = summary && !summary.offline && (
-    Array.isArray(summary.allergies)
-      ? summary.allergies.length > 0
-      : (summary.allergies && summary.allergies !== 'None' && summary.allergies !== 'Unknown')
-  );
-
-  const hasTraditionalMedicine = summary && !summary.offline &&
-    summary.traditional_medicine && summary.traditional_medicine !== 'None';
+  const allergyList = Array.isArray(summary?.allergies) ? summary.allergies : [];
+  const conditionList = Array.isArray(summary?.conditions) ? summary.conditions : [];
 
   const navItems = [
     { key: 'queue', label: 'Queue' },
@@ -370,13 +418,33 @@ const goTab = (t) => {
                   <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
                     Welcome, Dr. {displayName}
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
                     {now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                   </div>
                 </div>
-                <button className="mt-btn mt-btn-outline" style={{ fontSize: 10, padding: '4px 10px' }} onClick={refreshQueue} disabled={refreshingQueue}>
+                <button className="mt-btn mt-btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={refreshQueue} disabled={refreshingQueue}>
                   {refreshingQueue ? 'Refreshing…' : '↻ Refresh'}
                 </button>
+              </div>
+
+              <div className="mt-card">
+                <div className="mt-card-title">Open a patient with their share code</div>
+                <form onSubmit={redeemShareCode} style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    className="mt-input"
+                    style={{ flex: 1 }}
+                    inputMode="numeric"
+                    maxLength={6}
+                    placeholder="6-digit code from the patient"
+                    value={shareCode}
+                    onChange={(e) => setShareCode(e.target.value)}
+                  />
+                  <button className="mt-btn mt-btn-purple" type="submit" disabled={accessBusy}>
+                    {accessBusy ? 'Checking…' : 'Get access'}
+                  </button>
+                </form>
+                {accessMsg && <div className="alert-box alert-green" style={{ marginTop: 8 }}>{accessMsg}</div>}
+                {accessErr && <div className="alert-box alert-red" style={{ marginTop: 8 }}>{accessErr}</div>}
               </div>
 
               <div className="mt-card">
@@ -387,17 +455,17 @@ const goTab = (t) => {
                   <div className="stat-box"><div className="stat-num" style={{ color: '#854F0B' }}>{waiting.length}</div><div className="stat-label">Pending</div></div>
                 </div>
                 {waiting.length === 0 ? (
-                  <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem 0' }}>No patients waiting.</p>
+                  <EmptyState icon="☕" title="No patients waiting" text="New check-ins from reception show up here automatically." />
                 ) : waiting.map(v => (
                   <div key={v.id} className="prow" style={{ cursor: 'pointer' }}>
                     <div className="avatar" style={{ background: '#E6F1FB', color: '#0C447C' }}>{initials(v.careId)}</div>
                     <div style={{ flex: 1 }} onClick={() => openPatient(v.careId)}>
                       <div style={{ fontSize: 12, fontWeight: 600 }}>{v.careId}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                         Checked in {new Date(v.checkedInAt).toLocaleTimeString()}
                       </div>
                     </div>
-                    <span className="badge badge-gray">Waiting</span>
+                    <StatusBadge status="WAITING" />
                     <button className="mt-btn mt-btn-outline" style={{ padding: '4px 10px', fontSize: 10 }} onClick={() => removeVisit(v.id)}>✕</button>
                   </div>
                 ))}
@@ -407,7 +475,7 @@ const goTab = (t) => {
 
           {tab === 'patient' && (
             !selectedCareId ? (
-              <div className="mt-card"><p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Select a patient from the Queue tab first.</p></div>
+              <div className="mt-card"><EmptyState icon="👤" title="No patient selected" text="Pick a patient from the Queue tab, or open one with a share code." /></div>
             ) : (() => {
               const stats = buildHistoryStats(history);
 
@@ -425,7 +493,7 @@ const goTab = (t) => {
                 return { drugName, count: entries.length, daysAgo, lastIssuedAt: mostRecent.issuedAt };
               }).sort((a, b) => (a.daysAgo ?? Infinity) - (b.daysAgo ?? Infinity));
 
-              const activeCount = conflicts.length;
+              const activeCount = meds.length;
               const pastCount = pastAntibiotics.length;
 
               // ---- Drill-down: Active prescriptions ----
@@ -438,16 +506,14 @@ const goTab = (t) => {
                       </button>
                       <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-navy)' }}>Active prescriptions</span>
                     </div>
-                    {conflicts.map((c, i) => (
-                      <div key={i} className="mt-card" style={{ margin: '0 0 8px' }}>
+                    {meds.map((c, i) => (
+                      <div key={c.prescriptionId || i} className="mt-card" style={{ margin: '0 0 8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600 }}>
                           <span>{c.drug} {c.dose ? `(${c.dose})` : ''}</span>
-                          <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
-                            {c.issuedAt ? new Date(c.issuedAt).toLocaleDateString() : ''}
-                          </span>
+                          <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>{c.endDate ? `until ${c.endDate}` : 'no end date'}</span>
                         </div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
-                          {[c.drugClass && `${c.drugClass}-class`, c.frequency, c.duration].filter(Boolean).join(' · ')}
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 3 }}>
+                          {[c.frequency, (c.times || []).join(', ')].filter(Boolean).join(' · ')}
                         </div>
                       </div>
                     ))}
@@ -463,17 +529,17 @@ const goTab = (t) => {
                       <button className="mt-btn mt-btn-outline" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => setPatientView('main')}>
                         ← Back
                       </button>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-navy)' }}>Past antibiotics</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-navy)' }}>Past prescriptions</span>
                     </div>
                     {pastAntibiotics.map((p) => (
                       <div key={p.drugName} className="mt-card" style={{ margin: '0 0 8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600 }}>
                           <span>{p.drugName}</span>
-                          <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                          <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
                             {p.lastIssuedAt ? new Date(p.lastIssuedAt).toLocaleDateString() : ''}
                           </span>
                         </div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 3 }}>
                           {p.count}× · last {p.daysAgo}d ago
                         </div>
                       </div>
@@ -498,31 +564,9 @@ const goTab = (t) => {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                        {summary?.name || 'Loading...'}
+                        {summary?.name || (grantErr ? 'Name hidden' : 'Loading…')}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>CareID: {selectedCareId}</div>
-                    </div>
-                  </div>
-
-                  {summary?.offline && (
-                    <div className="alert-box alert-orange">
-                      ⚠ Patient service unreachable — allergy, vitals, and cross-facility history unavailable right now.
-                    </div>
-                  )}
-
-                  {/* Basic info row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                    <div className="mt-card" style={{ textAlign: 'center', margin: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-navy)' }}>{summary?.blood_group || '—'}</div>
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 3 }}>Blood group</div>
-                    </div>
-                    <div className="mt-card" style={{ textAlign: 'center', margin: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-navy)' }}>{summary?.age || '—'}</div>
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 3 }}>Age</div>
-                    </div>
-                    <div className="mt-card" style={{ textAlign: 'center', margin: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-navy)' }}>{summary?.gender || '—'}</div>
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 3 }}>Gender</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>CareID: {selectedCareId}</div>
                     </div>
                   </div>
 
@@ -532,15 +576,15 @@ const goTab = (t) => {
                       <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
                         {stats.antibiotics90Days}
                       </div>
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4 }}>
-                        Antibiotics (90d)
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4 }}>
+                        Prescriptions (90d)
                       </div>
                     </div>
                     <div className="mt-card" style={{ textAlign: 'center', margin: 0 }}>
                       <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
                         {stats.daysSinceLast === null ? '—' : stats.daysSinceLast === 0 ? 'Today' : stats.daysSinceLast}
                       </div>
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4 }}>
                         Since last Rx
                       </div>
                     </div>
@@ -552,44 +596,25 @@ const goTab = (t) => {
                       <div style={{ fontSize: 20, fontWeight: 700, color: activeCount > 0 ? 'var(--c-red-dark)' : 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
                         {activeCount}
                       </div>
-                      <div style={{ fontSize: 9, color: activeCount > 0 ? 'var(--c-red-dark)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4 }}>
+                      <div style={{ fontSize: 11, color: activeCount > 0 ? 'var(--c-red-dark)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4 }}>
                         Active now
                       </div>
                     </div>
                   </div>
 
-                  {hasRealAllergies && (
-                    <div className="mt-card" style={{ background: 'var(--c-red-bg)', border: '1px solid #F09595' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-red-dark)' }}>
-                        🛡 Allergy on file: {Array.isArray(summary.allergies) ? summary.allergies.join(', ') : summary.allergies}
-                      </div>
-                      <div style={{ fontSize: 10, color: '#791F1F', marginTop: 2 }}>
-                        Do not prescribe {Array.isArray(summary.allergies) ? summary.allergies.join(' or ') : summary.allergies}-class drugs.
-                      </div>
-                    </div>
-                  )}
-
-                  {hasTraditionalMedicine && (
-                    <div className="mt-card" style={{ background: 'var(--c-amber-bg)', border: '1px solid #E0A868' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-amber-dark)' }}>
-                        Traditional medicine in use — check herb-drug interactions before prescribing.
-                      </div>
-                    </div>
-                  )}
+                  <AllergyCard allergies={allergyList} />
 
                   {/* Comorbidities */}
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '10px 4px' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '10px 4px' }}>
                     <span style={{ fontWeight: 600, color: 'var(--text-body, #333)' }}>Any other disease: </span>
-                    {summary && summary.conditions && summary.conditions !== 'None' && summary.conditions !== 'Unknown'
-                      ? summary.conditions
-                      : 'None recorded'}
+                    {conditionList.length ? conditionList.join(', ') : 'None recorded'}
                   </div>
 
-                  {/* Active prescriptions */}
+                  {/* Current medicines */}
                   <div className="mt-card">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <div className="mt-card-title" style={{ marginBottom: 0 }}>
-                        Active prescriptions <span className="badge badge-gray" style={{ marginLeft: 6 }}>{activeCount}</span>
+                        Current medicines <span className="badge badge-gray" style={{ marginLeft: 6 }}>{activeCount}</span>
                       </div>
                       {activeCount > 3 && (
                         <button className="mt-btn mt-btn-outline" style={{ padding: '3px 8px', fontSize: 10 }} onClick={() => setPatientView('activeDetail')}>
@@ -598,22 +623,22 @@ const goTab = (t) => {
                       )}
                     </div>
                     {activeCount === 0 ? (
-                      <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>None active right now.</p>
-                    ) : conflicts.slice(0, 3).map((c, i) => (
-                      <div key={i} style={{ padding: '6px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                      <EmptyState icon="💊" title="No current medicines" />
+                    ) : meds.slice(0, 3).map((c, i) => (
+                      <div key={c.prescriptionId || i} style={{ padding: '6px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>{c.drug} {c.dose ? `(${c.dose})` : ''}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                          {c.drugClass ? `${c.drugClass} · ` : ''}since {c.issuedAt ? new Date(c.issuedAt).toLocaleDateString() : ''}
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {[c.frequency, c.endDate ? `until ${c.endDate}` : null].filter(Boolean).join(' · ')}
                         </div>
                       </div>
                     ))}
                   </div>
 
-                  {/* Past antibiotics */}
+                  {/* History */}
                   <div className="mt-card">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <div className="mt-card-title" style={{ marginBottom: 0 }}>
-                        Past antibiotics <span className="badge badge-gray" style={{ marginLeft: 6 }}>{pastCount}</span>
+                        Past prescriptions <span className="badge badge-gray" style={{ marginLeft: 6 }}>{pastCount}</span>
                       </div>
                       {pastCount > 4 && (
                         <button className="mt-btn mt-btn-outline" style={{ padding: '3px 8px', fontSize: 10 }} onClick={() => setPatientView('pastDetail')}>
@@ -622,11 +647,11 @@ const goTab = (t) => {
                       )}
                     </div>
                     {pastCount === 0 ? (
-                      <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>No previous prescriptions.</p>
+                      <EmptyState icon="🗂" title="No previous prescriptions" />
                     ) : pastAntibiotics.slice(0, 4).map((p, i) => (
                       <div key={p.drugName} style={{ padding: '6px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>{p.drugName}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.count}× · last {p.daysAgo}d ago</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{p.count}× · last {p.daysAgo}d ago</div>
                       </div>
                     ))}
                   </div>
@@ -644,7 +669,7 @@ const goTab = (t) => {
 
           {tab === 'rx' && (
             !selectedCareId ? (
-              <div className="mt-card"><p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Select a patient from the Queue tab first.</p></div>
+              <div className="mt-card"><EmptyState icon="👤" title="No patient selected" text="Pick a patient from the Queue tab, or open one with a share code." /></div>
             ) : (
               <div className="mt-card">
                 <div className="mt-card-title">New prescription — {selectedCareId}</div>
@@ -657,7 +682,7 @@ const goTab = (t) => {
                       background: 'var(--surface-1)',
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>Drug {index + 1}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>Drug {index + 1}</span>
                         {rxDrugs.length > 1 && (
                           <button type="button" className="mt-btn mt-btn-outline" style={{ padding: '2px 8px', fontSize: 10 }} onClick={() => removeDrugRow(index)}>
                             ✕ Remove
@@ -672,7 +697,7 @@ const goTab = (t) => {
                         value={row.drug}
                         onChange={(e) => {
                           updateDrugRow(index, 'drug', e.target.value);
-                          checkRiskForRow(index, e.target.value, row.duration);
+                          checkRiskForRow(index, e.target.value, row.strength, row.duration);
                         }}
                       >
                         <option value="">Select a drug...</option>
@@ -682,29 +707,7 @@ const goTab = (t) => {
                       </select>
 
                       {row.risk && (
-                        <div style={{ marginBottom: 8 }}>
-                          {row.risk.blocked ? (
-                            <div className="alert-box alert-red">
-                              <strong>🚫 Blocked:</strong> {row.risk.explanation}
-                            </div>
-                          ) : (
-                            <>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                                <span>AMR Risk {row.risk.awareCategory ? `· WHO: ${row.risk.awareCategory}` : ''}</span>
-                                <strong style={{ color: row.risk.riskLevel === 'HIGH' ? '#A32D2D' : row.risk.riskLevel === 'MEDIUM' ? '#854F0B' : '#27500A' }}>
-                                  {row.risk.riskLevel} ({(row.risk.riskScore * 100).toFixed(0)}%)
-                                </strong>
-                              </div>
-                              <div className="risk-track">
-                                <div className="risk-fill" style={{
-                                  width: `${row.risk.riskScore * 100}%`,
-                                  background: row.risk.riskLevel === 'HIGH' ? '#A32D2D' : row.risk.riskLevel === 'MEDIUM' ? '#854F0B' : '#1D9E75',
-                                }} />
-                              </div>
-                              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{row.risk.explanation}</div>
-                            </>
-                          )}
-                        </div>
+                        <SeverityCard severity={row.risk.severity} warning={row.risk.warning} explanation={row.risk.explanation} />
                       )}
 
 <label className="mt-label">Strength</label>
@@ -736,7 +739,7 @@ const goTab = (t) => {
                         placeholder="e.g. 7 days"
                         value={row.duration}
                         onChange={(e) => updateDrugRow(index, 'duration', e.target.value)}
-                        onBlur={() => checkRiskForRow(index, row.drug, row.duration)}
+                        onBlur={() => checkRiskForRow(index, row.drug, row.strength, row.duration)}
                       />
                     </div>
                   ))}
@@ -747,18 +750,27 @@ const goTab = (t) => {
 
                   {rxMsg && <div className="alert-box alert-green">{rxMsg}</div>}
 
-                  {issuedQr && (
-                    <div className="alert-box alert-blue" style={{ textAlign: 'center' }}>
-                      Prescription sent to the patient's app — they'll show their QR at the pharmacy.
+                  {rxWarnings.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Interaction check on what was issued</div>
+                      {rxWarnings.map((w, i) => (
+                        <SeverityCard key={i} drug={w.drug} severity={w.severity} warning={w.warning} explanation={w.explanation} />
+                      ))}
                     </div>
                   )}
 
-                  {rxErr && <div className={`alert-box ${rxBlocked ? 'alert-red' : 'alert-orange'}`}>{rxBlocked ? '⚠ ' : ''}{String(rxErr)}</div>}
+                  {issuedQr && (
+                    <div className="alert-box alert-blue" style={{ textAlign: 'center' }}>
+                      <RxQrCode code={issuedQr.code} />
+                      {issuedQr.code && <div style={{ fontSize: 11, marginTop: 6 }}>The patient shows this at the pharmacy. It is also on the Issued tab.</div>}
+                    </div>
+                  )}
+
+                  {rxErr && <div className="alert-box alert-orange">{String(rxErr)}</div>}
 
                   <button
                     className="mt-btn mt-btn-purple"
                     type="submit"
-                    disabled={rxDrugs.some(d => d.risk?.blocked)}
                   >
                     Issue Prescription
                   </button>
@@ -771,12 +783,12 @@ const goTab = (t) => {
             <div className="mt-card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div className="mt-card-title" style={{ marginBottom: 0 }}>Recently issued</div>
-                <button className="mt-btn mt-btn-outline" style={{ fontSize: 10, padding: '4px 10px' }} onClick={refreshIssued} disabled={refreshingIssued}>
+                <button className="mt-btn mt-btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={refreshIssued} disabled={refreshingIssued}>
                   {refreshingIssued ? 'Refreshing…' : '↻ Refresh'}
                 </button>
               </div>
               {issued.length === 0 ? (
-                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Nothing issued yet.</p>
+                <EmptyState icon="📄" title="Nothing issued yet" text="Prescriptions you issue appear here with their QR code." />
               ) : issued.map(g => {
                 const minsLeft = minutesLeftToRecall(g.issuedAt);
                 return (
@@ -784,18 +796,21 @@ const goTab = (t) => {
                     <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 11, fontWeight: 600 }}>Group #{g.id} — {g.careId}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                           {g.issuedAt ? new Date(g.issuedAt).toLocaleString() : ''}
                           {g.extendedDays > 0 ? ` · extended +${g.extendedDays}d` : ''}
                         </div>
                       </div>
-                      <span className={`badge ${g.status === 'ISSUED' ? 'badge-blue' : g.status === 'REVOKED' ? 'badge-red' : 'badge-green'}`}>{g.status}</span>
-                      <button className="mt-btn mt-btn-outline" style={{ padding: '4px 10px', fontSize: 10, marginLeft: 8 }} onClick={() => removeIssued(g.id)}>✕</button>
+                      <StatusBadge status={g.status} />
+                      <button className="mt-btn mt-btn-outline" style={{ padding: '4px 10px', fontSize: 11, marginLeft: 8 }} onClick={() => removeIssued(g.id)}>✕</button>
                     </div>
+                    {g.qrCode && g.status !== 'RECALLED' && (
+                      <div style={{ margin: '8px 0' }}><RxQrCode code={g.qrCode} size={140} /></div>
+                    )}
                     {g.status === 'ISSUED' && minsLeft > 0 && (
                       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: 10, color: 'var(--c-red)' }}>⏱ Recall window — {minsLeft} min remaining</span>
-                        <button className="mt-btn mt-btn-red" style={{ fontSize: 10, padding: '4px 10px' }} onClick={() => recallGroup(g.id)}>
+                        <span style={{ fontSize: 11, color: 'var(--c-red)' }}>⏱ Recall window — {minsLeft} min remaining</span>
+                        <button className="mt-btn mt-btn-red" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => recallGroup(g.id)}>
                           Recall prescription
                         </button>
                       </div>
@@ -809,25 +824,25 @@ const goTab = (t) => {
           {tab === 'extend' && (
             <div className="mt-card">
               <div className="mt-card-title">Extend prescription</div>
-              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+              <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
                 Patient returns, continue the same medicine — no new prescription needed.
               </p>
 
               {extendMsg && <div className="alert-box alert-green">{extendMsg}</div>}
 
               {issued.filter(g => g.status === 'ISSUED' || g.status === 'DISPENSED').length === 0 ? (
-                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>No active prescriptions to extend.</p>
+                <EmptyState icon="📄" title="No active prescriptions to extend" />
               ) : issued.filter(g => g.status === 'ISSUED' || g.status === 'DISPENSED').map(g => (
 <div key={g.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10 }}>
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
     <div>
       <strong style={{ fontSize: 12 }}>Group #{g.id} — {g.careId}</strong>
-      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
         Issued {g.issuedAt ? new Date(g.issuedAt).toLocaleDateString() : ''}
         {g.extendedDays > 0 ? ` · already extended +${g.extendedDays}d` : ''}
       </div>
     </div>
-    <span className={`badge ${g.status === 'ISSUED' ? 'badge-blue' : 'badge-green'}`}>{g.status}</span>
+    <StatusBadge status={g.status} />
   </div>
 
   {g.drugs && g.drugs.length > 0 && (
@@ -898,7 +913,7 @@ const goTab = (t) => {
                     <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>
                       {user?.specialization || 'Specialization not set'} · {user?.facilityName}
                     </div>
-                    <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>{user?.username}</div>
+                    <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{user?.username}</div>
                   </div>
                 </div>
               </div>
@@ -911,9 +926,9 @@ const goTab = (t) => {
       <div><div className="mt-label">State council</div><div style={{ fontSize: 12 }}>{profile.stateCouncil}</div></div>
     </div>
     <div style={{ marginTop: 10 }}>
-      <span className={`badge ${profile.verificationStatus === 'VERIFIED' ? 'badge-green' : 'badge-gray'}`}>
+      <StatusBadge status={profile.verificationStatus || 'PENDING'}>
         {profile.verificationStatus === 'VERIFIED' ? '✓ Licence verified' : 'Licence pending review'}
-      </span>
+      </StatusBadge>
     </div>
   </div>
 )}
@@ -942,7 +957,7 @@ const goTab = (t) => {
                   </div>
                 ) : (
                   <>
-                    <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+                    <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
                       Going on leave? Pick your dates and assign a substitute — Reception will automatically route your patients to them.
                     </p>
 

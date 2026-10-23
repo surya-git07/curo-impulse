@@ -7,7 +7,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 /**
  * One record in the mock licence registry. All seeded data is invented.
- * type is DOCTOR or PHARMACY; stateCouncil is set for doctors, gstin for pharmacies.
+ * type is DOCTOR, CLINIC, HOSPITAL or PHARMACY; stateCouncil is set for doctors, gstin for the three facility types.
  */
 @Data
 @Document("licence_registry")
@@ -16,6 +16,8 @@ public class LicenceRegistryEntry {
 
     public static final String DOCTOR = "DOCTOR";
     public static final String PHARMACY = "PHARMACY";
+    public static final String CLINIC = "CLINIC";
+    public static final String HOSPITAL = "HOSPITAL";
 
     @Id
     private String id;

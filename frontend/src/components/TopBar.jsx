@@ -37,7 +37,7 @@ function TopBar() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>{timeStr}</div>
-          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.55)' }}>{dateStr}</div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)' }}>{dateStr}</div>
         </div>
         <div
           className="avatar"
