@@ -16,6 +16,7 @@ import ShareRecord from './ShareRecord';
 import ConsentApproval from './ConsentApproval';
 import * as api from './api';
 import { MOCK_MODE } from './config';
+import { findInteractions, findAllergyConflicts } from './ruleChecks';
 import {
   MOCK_PATIENT, MOCK_PRESCRIPTIONS, MOCK_TODAY_SCHEDULE,
   MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG,
@@ -92,6 +93,7 @@ function AppInner() {
   const [homePrescriptions, setHomePrescriptions] = useState([]); // Home (live, or mock fallback)
   const [medications, setMedications] = useState(null);     // live only; null hides the card list
   const [schedule, setSchedule] = useState([]);
+  const [profileLive, setProfileLive] = useState(false);    // true when the profile (allergies) came from the server
   const [scheduleLive, setScheduleLive] = useState(false);  // true when doses came from the server
   const [loggingIn, setLoggingIn] = useState(false);
 
@@ -127,6 +129,7 @@ function AppInner() {
     setPrescriptions(MOCK_PRESCRIPTIONS);
     setHomePrescriptions(MOCK_PRESCRIPTIONS);
     setMedications(null);
+    setProfileLive(false);
     setSchedule(MOCK_TODAY_SCHEDULE);
     setScheduleLive(false);
     setPassword('');
@@ -161,6 +164,7 @@ function AppInner() {
       orMock(() => api.getTodayDoses(), null),
     ]);
     setPatient(me || MOCK_PATIENT);
+    setProfileLive(!!me);
     setHomePrescriptions(MOCK_PRESCRIPTIONS);
     setMedications(meds);
     setSchedule(doses || MOCK_TODAY_SCHEDULE);
@@ -230,7 +234,7 @@ function AppInner() {
   const logout = () => {
     api.clearSession();
     setPatient(null); setPrescriptions([]); setHomePrescriptions([]); setMedications(null);
-    setSchedule([]); setScheduleLive(false);
+    setSchedule([]); setScheduleLive(false); setProfileLive(false);
     setTab('home'); setShowActive(false); setVisitExpanded({}); setScreen('login');
   };
 
@@ -281,58 +285,18 @@ function AppInner() {
     );
   }
 
-  // ---- SIGNUP ----
+    // ---- SIGNUP (disabled for demo build) ----
   if (screen === 'signup') {
-    if (newCareId) {
-      return (
-        <SafeAreaView style={styles.screen}>
-          <StatusBar barStyle="dark-content" />
-          <View style={styles.authBody}>
-            <Text style={styles.brand}>Curo</Text>
-            <View style={styles.careIdCard}>
-              <Text style={styles.careIdLabel}>Your CareID</Text>
-              <Text style={styles.careIdValue}>{newCareId}</Text>
-              <Text style={styles.careIdNote}>
-                This is your health ID. Save it — doctors and pharmacies use it to find
-                your shared medicine record.
-              </Text>
-            </View>
-            <TouchableOpacity style={styles.button} onPress={() => { setNewCareId(''); setConsentGiven(false); setScreen('login'); }}>
-              <Text style={styles.buttonText}>Continue to Login</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      );
-    }
     return (
       <SafeAreaView style={styles.screen}>
         <StatusBar barStyle="dark-content" />
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ScrollView contentContainerStyle={styles.authBody} keyboardShouldPersistTaps="handled">
-            <Text style={styles.brand}>Curo</Text>
-            <Text style={styles.subtitle}>Create your account</Text>
-            <TextInput style={styles.input} placeholder="Full name" value={name} onChangeText={setName} />
-            <TextInput style={styles.input} placeholder="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-            <TextInput style={styles.input} placeholder="Set a password" value={password} onChangeText={setPassword} secureTextEntry />
-
-            <TouchableOpacity style={styles.consentRow} onPress={() => setConsentGiven((v) => !v)} activeOpacity={0.7}>
-              <View style={[styles.checkbox, consentGiven && styles.checkboxOn]}>
-                {consentGiven && <Text style={styles.tick}>✓</Text>}
-              </View>
-              <Text style={styles.consentText}>
-                I agree to Curo storing my health data as described in the{' '}
-                <Text style={styles.consentLink} onPress={() => setOverlay('privacy')}>Privacy Notice</Text>.
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.button} onPress={doSignup}>
-              <Text style={styles.buttonText}>Sign Up</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setScreen('login')}>
-              <Text style={styles.link}>Already have an account? Log in</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </KeyboardAvoidingView>
+        <View style={styles.authBody}>
+          <Text style={styles.brand}>Curo</Text>
+          <Text style={styles.subtitle}>Demo build: sign in with the demo account</Text>
+          <TouchableOpacity style={styles.button} onPress={() => setScreen('login')}>
+            <Text style={styles.buttonText}>Back to Login</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     );
   }
@@ -379,9 +343,7 @@ function AppInner() {
           <TouchableOpacity onPress={() => setScreen('forgot')}>
             <Text style={styles.forgot}>Forgot password?</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setScreen('signup')}>
-            <Text style={styles.link}>New here? Sign up</Text>
-          </TouchableOpacity>
+          <Text style={styles.demoNote}>Demo build: sign in with the demo account</Text>
         </View>
       </SafeAreaView>
     );
@@ -394,7 +356,14 @@ function AppInner() {
     return match && (!antibioticOnly || p.isAntibiotic);
   });
   const active = homePrescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
-  const conflicts = active.filter((p) => p.allergyConflict);
+  // Interaction and allergy checks: computed from the real medicine list and allergies
+  // when they loaded from the server; otherwise the mock demo data, as before.
+  const liveMeds = medications !== null;
+  const interactions = liveMeds ? findInteractions(medications.map((m) => m.drug)) : MOCK_INTERACTIONS;
+  const conflicts = liveMeds && profileLive
+    ? findAllergyConflicts(medications.map((m) => m.drug), patient.allergies)
+    : active.filter((p) => p.allergyConflict).map((p) => ({ drug: p.drugName, allergy: null }));
+  const conflictDrugs = [...new Set(conflicts.map((c) => c.drug))];
   const activeVisits = groupByVisit(active);
   const historyVisits = groupByVisit(filtered);
   const takenCount = schedule.filter((d) => d.taken).length;
@@ -433,7 +402,7 @@ function AppInner() {
             ) : null}
 
             {/* Drug-drug interaction warnings */}
-            {MOCK_INTERACTIONS.map((ix) => (
+            {interactions.map((ix) => (
               <View key={ix.id} style={[styles.interactionCard, { borderLeftColor: SEVERITY_COLORS[ix.severity] }]}>
                 <Text style={styles.interactionTitle}>🚨 {ix.drugA} + {ix.drugB} — {ix.warning}</Text>
                 <Text style={styles.interactionText}>{ix.explanation}</Text>
@@ -445,7 +414,7 @@ function AppInner() {
               <View style={styles.conflictBanner}>
                 <Text style={styles.conflictTitle}>🚨 Allergy Conflict</Text>
                 <Text style={styles.conflictText}>
-                  {conflicts.length === 1 ? `${conflicts[0].drugName} conflicts with your recorded allergies.` : `${conflicts.length} active medicines conflict with your allergies.`} Contact your doctor before taking.
+                  {conflictDrugs.length === 1 ? `${conflictDrugs[0]} conflicts with your recorded allergies${conflicts[0].allergy ? ` (${conflicts.map((c) => c.allergy).join(', ')})` : ''}.` : `${conflictDrugs.length} active medicines conflict with your allergies.`} Contact your doctor before taking.
                 </Text>
               </View>
             ) : null}
@@ -649,6 +618,7 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   link: { color: TEAL, textAlign: 'center', marginTop: 16, fontWeight: '600' },
   forgot: { color: '#14a1a6', textAlign: 'center', marginTop: 14, fontWeight: '600' },
+  demoNote: { color: '#8a9a9a', textAlign: 'center', marginTop: 16, fontSize: 13, fontStyle: 'italic' },
   hint: { color: '#c00', textAlign: 'center', marginBottom: 8, fontWeight: '600' },
 
   consentRow: { flexDirection: 'row', alignItems: 'flex-start', marginVertical: 12 },
