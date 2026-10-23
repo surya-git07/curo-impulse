@@ -1,0 +1,324 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  --c-navy: #0B2545;
+  --c-navy-dark: #081A33;
+  --c-navy-light: #132C52;
+  --c-amber: #C97B2E;
+  --c-amber-bg: #FBEEE0;
+  --c-amber-dark: #8A5620;
+  --c-teal: #0F4C42;
+  --c-plum: #3A2E5C;
+
+  --border: #E4E7EB;
+  --text-primary: #1A2430;
+  --text-secondary: #5B6B79;
+  --text-muted: #8B99A7;
+  --surface-1: #F6F8F9;
+  --surface-2: #FFFFFF;
+  --c-red: #A32D2D;
+  --c-red-bg: #FCEBEB;
+}
+
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--surface-1);
+  font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  padding: 1.5rem;
+}
+
+.login-shell {
+  display: flex;
+  width: 100%;
+  max-width: 760px;
+  min-height: 520px;
+  background: var(--surface-2);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 0.5px solid var(--border);
+  box-shadow: 0 12px 40px rgba(11, 37, 69, 0.12);
+}
+
+.welcome-panel {
+  flex: 1.4;
+  background: var(--c-navy);
+  background-image:
+    radial-gradient(circle at 85% 0%, rgba(201, 123, 46, 0.15), transparent 55%),
+    repeating-linear-gradient(135deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 26px);
+  color: white;
+  padding: 2.25rem 2rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+}
+
+.form-panel {
+  flex: 1;
+  padding: 2rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.welcome-badge i {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.welcome-pathway {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 1.5rem;
+}
+
+.welcome-pathway-step {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.welcome-pathway-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(201, 123, 46, 0.18);
+  border: 1px solid rgba(201, 123, 46, 0.5);
+  color: #E8A15C;
+  font-size: 0.62rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.welcome-pathway-step span {
+  color: rgba(255,255,255,0.55);
+  font-size: 0.65rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.welcome-pathway-line {
+  width: 14px;
+  height: 1px;
+  background: rgba(201, 123, 46, 0.35);
+}
+
+.theme-private .welcome-panel { background: var(--c-navy); background-image: radial-gradient(circle at 85% 0%, rgba(201, 123, 46, 0.15), transparent 55%); }
+.theme-government .welcome-panel { background: var(--c-plum); background-image: radial-gradient(circle at 85% 0%, rgba(201, 123, 46, 0.15), transparent 55%); }
+.theme-pharmacy .welcome-panel { background: var(--c-amber-dark); background-image: radial-gradient(circle at 85% 0%, rgba(255, 255, 255, 0.08), transparent 55%); }
+.theme-clinic .welcome-panel { background: var(--c-teal); background-image: radial-gradient(circle at 85% 0%, rgba(201, 123, 46, 0.15), transparent 55%); }
+
+.page-brand {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #E8A15C;
+  letter-spacing: 0.02em;
+  margin-bottom: 1.1rem;
+}
+
+.welcome-badge {
+  width: 42px;
+  height: 42px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  margin-bottom: 1.25rem;
+}
+
+.welcome-panel h2 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0 0 0.6rem;
+}
+
+.welcome-panel p {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.72);
+  margin: 0 0 1.5rem;
+}
+
+.form-panel {
+  flex: 1;
+  padding: 2rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.form-panel h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  margin: 0 0 0.2rem;
+  color: var(--text-primary);
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.subtitle {
+  color: var(--text-muted);
+  margin-bottom: 1.25rem;
+  font-size: 0.75rem;
+}
+
+.entry-tabs {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 1.25rem;
+  background: var(--surface-1);
+  padding: 3px;
+  border-radius: 8px;
+  border: 0.5px solid var(--border);
+}
+
+.entry-tab {
+  flex: 1;
+  padding: 0.45rem 0.4rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.entry-tab.active {
+  background: white;
+  color: var(--c-navy);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.theme-government .entry-tab.active { color: var(--c-plum); }
+.theme-pharmacy .entry-tab.active { color: var(--c-amber-dark); }
+.theme-clinic .entry-tab.active { color: var(--c-teal); }
+
+.field-group { text-align: left; }
+
+.field-group label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+input.plain, .login-card input, select.plain {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  outline: none;
+  transition: border 0.15s;
+  box-sizing: border-box;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+}
+
+input.plain::placeholder { color: var(--text-muted); }
+
+input.plain:focus, select.plain:focus {
+  border-color: var(--c-navy);
+  box-shadow: 0 0 0 3px rgba(11, 37, 69, 0.08);
+}
+
+.btn, .login-card button {
+  padding: 0.65rem;
+  background: var(--c-navy);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  font-family: 'Inter', sans-serif;
+}
+
+.form-panel form button[type="submit"] {
+  padding: 0.65rem;
+  background: var(--c-navy);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  font-family: 'Inter', sans-serif;
+}
+.theme-government .btn, .theme-government .form-panel form button[type="submit"] { background: var(--c-plum); }
+.theme-pharmacy .btn, .theme-pharmacy .form-panel form button[type="submit"] { background: var(--c-amber-dark); }
+.theme-clinic .btn, .theme-clinic .form-panel form button[type="submit"] { background: var(--c-teal); }
+
+.btn:hover:not(:disabled) { opacity: 0.9; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  border: 0.5px solid var(--border);
+}
+
+.error {
+  color: var(--c-red);
+  background: var(--c-red-bg);
+  padding: 0.4rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  margin: 0;
+}
+
+.role-badge {
+  display: inline-block;
+  background: rgba(201, 123, 46, 0.15);
+  color: #E8A15C;
+  padding: 0.2rem 0.6rem;
+  border-radius: 20px;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  width: fit-content;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.back-btn svg {
+  width: 14px;
+  height: 14px;
+}

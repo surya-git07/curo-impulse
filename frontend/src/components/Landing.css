@@ -1,0 +1,163 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+.mt-landing {
+  min-height: 100vh;
+  background: #0B2545;
+  background-image: radial-gradient(circle at 15% 0%, rgba(201, 123, 46, 0.10), transparent 45%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8vh 1.5rem 3rem;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.mt-landing-hero {
+  text-align: center;
+  max-width: 640px;
+  margin-bottom: 3.5rem;
+}
+
+.mt-landing-eyebrow {
+  display: inline-block;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #C97B2E;
+  font-weight: 600;
+  margin-bottom: 1.1rem;
+}
+
+.mt-landing-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 2.4rem;
+  font-weight: 700;
+  color: #F5F7FA;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  margin: 0 0 1rem;
+}
+
+.mt-landing-subtitle {
+  color: #A9B7CC;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  max-width: 460px;
+  margin: 0 auto 2.5rem;
+}
+
+.mt-landing-pathway {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+}
+
+.mt-landing-pathway-step {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.mt-landing-pathway-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(201, 123, 46, 0.15);
+  border: 1.5px solid #C97B2E;
+  color: #E8A15C;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mt-landing-pathway-step span {
+  color: #C7D2E3;
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mt-landing-pathway-line {
+  width: 32px;
+  height: 1.5px;
+  background: linear-gradient(90deg, #C97B2E, rgba(201, 123, 46, 0.15));
+  margin: 0 0.7rem;
+}
+
+.mt-landing-section-label {
+  color: #6B7C99;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 1.25rem;
+}
+
+.mt-landing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.1rem;
+  max-width: 760px;
+  width: 100%;
+}
+
+.mt-landing-card {
+  background: #132C52;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 1.9rem 1.2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.mt-landing-card:hover,
+.mt-landing-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: rgba(201, 123, 46, 0.4);
+  background: #15315D;
+  outline: none;
+}
+
+.mt-landing-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 0.9rem;
+}
+
+.mt-landing-card-title {
+  display: block;
+  font-family: 'Space Grotesk', sans-serif;
+  color: #F5F7FA;
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.mt-landing-card-sub {
+  display: block;
+  color: #7E8FAD;
+  font-size: 0.75rem;
+}
+
+.mt-landing-footer {
+  margin-top: 3rem;
+  color: #4C5A78;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
+@media (max-width: 640px) {
+  .mt-landing-title { font-size: 1.7rem; }
+  .mt-landing-grid { grid-template-columns: 1fr; }
+  .mt-landing-pathway { flex-wrap: wrap; row-gap: 0.6rem; }
+  .mt-landing-pathway-line { display: none; }
+}

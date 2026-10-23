@@ -1,0 +1,68 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+.page {
+  background: #0B2545;
+  background-image: radial-gradient(circle at 15% 0%, rgba(201, 123, 46, 0.10), transparent 45%);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.page-brand {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #C97B2E;
+  letter-spacing: 0.02em;
+  margin-bottom: 1.5rem;
+}
+
+.page h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  color: #F5F7FA !important;
+}
+
+.page p {
+  color: #A9B7CC !important;
+}
+
+.card {
+  background: #132C52;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(201, 123, 46, 0.4);
+  background: #15315D;
+}
+
+.card strong {
+  color: #F5F7FA !important;
+}
+
+.btn {
+  padding: 0.65rem 1.3rem;
+  background: #C97B2E;
+  color: #0B2545;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  font-family: 'Inter', sans-serif;
+}
+
+.btn:hover { opacity: 0.9; }
+
+.btn-secondary {
+  background: transparent;
+  color: #A9B7CC;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.btn-secondary:hover {
+  background: rgba(255,255,255,0.05);
+  opacity: 1;
+}
