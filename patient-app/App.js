@@ -13,6 +13,7 @@ import BookTab from './BookTab';
 import QrTab from './QrTab';
 import PrivacyNotice from './PrivacyNotice';
 import ShareRecord from './ShareRecord';
+import ConsentApproval from './ConsentApproval';
 import {
   MOCK_PATIENT, MOCK_PRESCRIPTIONS, MOCK_TODAY_SCHEDULE,
   MOCK_INTERACTIONS, SEVERITY_COLORS, MOCK_ACCESS_LOG,
@@ -398,6 +399,7 @@ function AppInner() {
             <SettingsItem text="🧾  Prescription History" onPress={() => setTab('history')} />
             <SettingsItem text="👁️  Who Viewed My Record" onPress={() => setTab('accesslog')} />
             <SettingsItem text="🔗  Share my record" onPress={() => setTab('share')} />
+            <SettingsItem text="🛡️  Access Requests" onPress={() => setTab('consent')} />
             <SettingsItem text="🔒  Privacy Notice" onPress={() => setOverlay('privacy')} />
             <SettingsItem text="ℹ️  About Curo" onPress={() => Alert.alert('Curo', 'Version 1.0 (demo)')} />
             <TouchableOpacity style={styles.logoutButton} onPress={logout}><Text style={styles.buttonText}>Log Out</Text></TouchableOpacity>
@@ -409,6 +411,9 @@ function AppInner() {
 
         {/* SHARE MY RECORD (reached from Settings) */}
         {tab === 'share' && <ShareRecord onBack={() => setTab('settings')} onCopied={showToast} />}
+
+        {/* ACCESS REQUESTS (reached from Settings) */}
+        {tab === 'consent' && <ConsentApproval onBack={() => setTab('settings')} />}
 
         {/* HISTORY (reached from Settings) */}
         {tab === 'history' && (
