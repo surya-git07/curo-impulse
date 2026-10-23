@@ -28,6 +28,26 @@ public class AppUser {
 
     private Consent consent;
 
+    // DOCTOR: licenceNumber + stateCouncil. PHARMACY: drugLicenceNumber + gstin + state. Numbers are stored upper-case.
+    @Indexed(unique = true, sparse = true)
+    private String licenceNumber;
+
+    private String stateCouncil;
+
+    @Indexed(unique = true, sparse = true)
+    private String drugLicenceNumber;
+
+    private String gstin;
+
+    private String state;
+
+    // set for DOCTOR and PHARMACY only; null for everyone else
+    private VerificationStatus verificationStatus;
+
+    private String verificationReasonCode;
+
+    private String verificationReason;
+
     private String facilityId;
 
     private String facilityName;

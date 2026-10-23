@@ -26,6 +26,7 @@ class HealthControllerTest {
         registry.add("jwt.secret", () -> UUID.randomUUID() + UUID.randomUUID().toString());
         registry.add("spring.mongodb.uri", () -> "mongodb://localhost:27017/curo-test");
         registry.add("spring.data.mongodb.auto-index-creation", () -> "false");
+        registry.add("licence.verification.seed-on-startup", () -> "false");
     }
 
     @Autowired

@@ -144,18 +144,29 @@ class AuthServiceTest {
     }
 
     @Test
-    void signupOnlyAllowsPatientAndCaregiverForNow() {
+    void signupRoleRules() {
         SignupRequest caregiver = signupRequest();
         caregiver.setRole("caregiver");
         assertThat(service.signup(caregiver).getRole()).isEqualTo("CAREGIVER");
 
+        // licensed roles need their licence fields (full flow is in AuthServiceLicenceTest)
         SignupRequest doctor = signupRequest();
         doctor.setRole("DOCTOR");
-        assertApiError(() -> service.signup(doctor), HttpStatus.NOT_IMPLEMENTED, "ROLE_NOT_SUPPORTED_YET");
+        assertApiError(() -> service.signup(doctor), HttpStatus.BAD_REQUEST, "LICENCE_FIELDS_REQUIRED");
 
         SignupRequest admin = signupRequest();
         admin.setRole("SUPER_ADMIN");
         assertApiError(() -> service.signup(admin), HttpStatus.BAD_REQUEST, "INVALID_ROLE");
+    }
+
+    @Test
+    void patientSignupHasNoVerificationFields() {
+        SignupResponse response = service.signup(signupRequest());
+
+        assertThat(response.getVerificationStatus()).isNull();
+        assertThat(response.getVerificationReasonCode()).isNull();
+        assertThat(response.getVerificationReason()).isNull();
+        assertThat(byPhone.get("9000000001").getVerificationStatus()).isNull();
     }
 
     @Test

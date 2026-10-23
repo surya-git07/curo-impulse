@@ -2,6 +2,8 @@ package com.curo.curo_backend.controller;
 
 import com.curo.curo_backend.dto.ApiError;
 import com.curo.curo_backend.service.ApiException;
+import com.curo.curo_backend.service.GrantExistsException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -14,7 +16,14 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApi(ApiException e) {
-        return ResponseEntity.status(e.getStatus()).body(new ApiError(e.getCode(), e.getMessage()));
+        String grantId = e instanceof GrantExistsException g ? g.getGrantId() : null;
+        return ResponseEntity.status(e.getStatus()).body(new ApiError(e.getCode(), e.getMessage(), grantId));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleBadParam(MethodArgumentTypeMismatchException e) {
+        return ResponseEntity.badRequest()
+                .body(new ApiError("VALIDATION_ERROR", "Parameter " + e.getName() + " has an invalid value."));
     }
 
     // Reports field names and rules only, never the rejected value (it may be a password)

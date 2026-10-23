@@ -23,4 +23,21 @@ public class SignupRequest {
     private String password;
 
     private ConsentRequest consent;
+
+    // DOCTOR
+    @Size(max = 40)
+    private String licenceNumber;
+
+    @Size(max = 100)
+    private String stateCouncil;
+
+    // PHARMACY
+    @Size(max = 40)
+    private String drugLicenceNumber;
+
+    @Size(max = 20)
+    private String gstin;
+
+    @Size(max = 10)
+    private String state;
 }

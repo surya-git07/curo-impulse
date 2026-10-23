@@ -10,4 +10,6 @@ public interface UserRepository extends MongoRepository<AppUser, String> {
     Optional<AppUser> findByPhone(String phone);
     boolean existsByCareId(String careId);
     boolean existsByPhone(String phone);
+    boolean existsByLicenceNumber(String licenceNumber);
+    boolean existsByDrugLicenceNumber(String drugLicenceNumber);
 }

@@ -4,6 +4,7 @@ import com.curo.curo_backend.dto.LoginResponse;
 import com.curo.curo_backend.dto.SignupResponse;
 import com.curo.curo_backend.dto.UserSummary;
 import com.curo.curo_backend.model.Consent;
+import com.curo.curo_backend.model.VerificationStatus;
 import com.curo.curo_backend.service.ApiException;
 import com.curo.curo_backend.service.AuthService;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,6 +62,56 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.consent.acceptedAt").value("2026-10-23T10:15:00Z"))
                 .andExpect(jsonPath("$.passwordHash").doesNotExist())
                 .andExpect(jsonPath("$.password").doesNotExist());
+    }
+
+    @Test
+    void licensedSignupResponseCarriesVerificationFieldsAndPatientResponseDoesNot() throws Exception {
+        Consent consent = new Consent();
+        consent.setAccepted(true);
+        consent.setPolicyVersion("2026-10-01");
+        consent.setAcceptedAt(Instant.parse("2026-10-23T10:20:00Z"));
+        when(authService.signup(any())).thenReturn(
+                new SignupResponse("665f0000000000000000a002", "CID-4HN8XD", "Anjali Varadarajan", "DOCTOR", consent,
+                        VerificationStatus.PENDING, "LICENCE_NOT_IN_REGISTRY", "Not found; a SUPER_ADMIN will review it."));
+
+        mvc.perform(post("/auth/signup").contentType(MediaType.APPLICATION_JSON).content(SIGNUP_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Anjali Varadarajan"))
+                .andExpect(jsonPath("$.fullName").doesNotExist())
+                .andExpect(jsonPath("$.verificationStatus").value("PENDING"))
+                .andExpect(jsonPath("$.verificationReasonCode").value("LICENCE_NOT_IN_REGISTRY"))
+                .andExpect(jsonPath("$.verificationReason").value("Not found; a SUPER_ADMIN will review it."))
+                .andExpect(jsonPath("$.status").doesNotExist());
+
+        when(authService.signup(any())).thenReturn(
+                new SignupResponse("665f0000000000000000a001", "CID-7K3MQ9", "Test Patient", "PATIENT", consent));
+
+        mvc.perform(post("/auth/signup").contentType(MediaType.APPLICATION_JSON).content(SIGNUP_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.verificationStatus").doesNotExist())
+                .andExpect(jsonPath("$.verificationReasonCode").doesNotExist())
+                .andExpect(jsonPath("$.verificationReason").doesNotExist());
+    }
+
+    @Test
+    void licenceSignupFieldsAreAcceptedInTheRequestBody() throws Exception {
+        org.mockito.ArgumentCaptor<com.curo.curo_backend.dto.SignupRequest> captor =
+                org.mockito.ArgumentCaptor.forClass(com.curo.curo_backend.dto.SignupRequest.class);
+        when(authService.signup(captor.capture())).thenReturn(
+                new SignupResponse("id", "CID-4HN8XD", "Sri Velan Medicals", "PHARMACY", new Consent()));
+
+        mvc.perform(post("/auth/signup").contentType(MediaType.APPLICATION_JSON).content("""
+                {"role":"PHARMACY","name":"Sri Velan Medicals","phone":"9000000003","password":"correct-horse-battery",
+                 "drugLicenceNumber":"TN/CHE/20B-48213","gstin":"33AAGFS4821K1Z5","state":"TN",
+                 "address":"1 Test Street","lat":13.08,"lng":80.27,
+                 "consent":{"accepted":true,"policyVersion":"2026-10-01"}}
+                """)).andExpect(status().isCreated());
+
+        var sent = captor.getValue();
+        org.assertj.core.api.Assertions.assertThat(sent.getDrugLicenceNumber()).isEqualTo("TN/CHE/20B-48213");
+        org.assertj.core.api.Assertions.assertThat(sent.getGstin()).isEqualTo("33AAGFS4821K1Z5");
+        org.assertj.core.api.Assertions.assertThat(sent.getState()).isEqualTo("TN");
+        org.assertj.core.api.Assertions.assertThat(sent.getName()).isEqualTo("Sri Velan Medicals");
     }
 
     @Test

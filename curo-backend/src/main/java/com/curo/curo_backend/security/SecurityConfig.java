@@ -52,7 +52,9 @@ public class SecurityConfig {
                         .requestMatchers("/hospital/*/verify", "/hospital/*/reject",
                                 "/pharmacy-facility/*/verify", "/pharmacy-facility/*/reject")
                         .hasRole("SUPER_ADMIN")
-                        .requestMatchers("/auth/**", "/patient/**", "/hospital/**", "/pharmacy-facility/**").permitAll()
+                        // New patient-data endpoints decide access in AccessGuard, so /patient/** is no longer public
+                        .requestMatchers("/patient/me", "/patient/me/**").hasRole("PATIENT")
+                        .requestMatchers("/auth/**", "/hospital/**", "/pharmacy-facility/**").permitAll()
                         .requestMatchers("/drugs/**").hasAnyRole("DOCTOR", "ADMIN", "PHARMACY")
                         .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/reception/visit/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/reception/queue/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")

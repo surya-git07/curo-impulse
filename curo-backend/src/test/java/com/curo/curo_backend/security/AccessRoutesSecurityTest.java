@@ -1,0 +1,84 @@
+package com.curo.curo_backend.security;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+
+/**
+ * Runs the real security filter chains. Only requests that are refused before any database call are made here,
+ * since there is no MongoDB in the test run.
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+class AccessRoutesSecurityTest {
+
+    @DynamicPropertySource
+    static void properties(DynamicPropertyRegistry registry) {
+        registry.add("jwt.secret", () -> UUID.randomUUID() + UUID.randomUUID().toString());
+        registry.add("spring.mongodb.uri", () -> "mongodb://localhost:27017/curo-test");
+        registry.add("spring.data.mongodb.auto-index-creation", () -> "false");
+        registry.add("licence.verification.seed-on-startup", () -> "false");
+    }
+
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private JwtService jwtService;
+
+    private int statusOf(MockHttpServletRequestBuilder request) throws Exception {
+        return mvc.perform(request).andReturn().getResponse().getStatus();
+    }
+
+    private MockHttpServletRequestBuilder as(String role, MockHttpServletRequestBuilder request) {
+        return request.header("Authorization", "Bearer " + jwtService.generateToken("u-" + role, role, "CID-7K3MQ9", null));
+    }
+
+    @Test
+    void noTokenMeansNoAccessToAnyOfTheNewRoutes() throws Exception {
+        assertThat(statusOf(get("/careid/CID-7K3MQ9"))).isIn(401, 403);
+        assertThat(statusOf(post("/access-grants").contentType("application/json").content("{}"))).isIn(401, 403);
+        assertThat(statusOf(post("/access-grants/g1/approve"))).isIn(401, 403);
+        assertThat(statusOf(post("/access-grants/g1/revoke"))).isIn(401, 403);
+        assertThat(statusOf(get("/access-grants"))).isIn(401, 403);
+        assertThat(statusOf(post("/patient/me/share-codes").contentType("application/json").content("{}"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/me/access-log"))).isIn(401, 403);
+    }
+
+    @Test
+    void patientRoutesAreNoLongerPublic() throws Exception {
+        assertThat(statusOf(get("/patient/CID-7K3MQ9/summary"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/CID-7K3MQ9/history"))).isIn(401, 403);
+    }
+
+    @Test
+    void patientOnlyRoutesRefuseEveryOtherRoleBeforeReachingTheDatabase() throws Exception {
+        for (String role : new String[]{"DOCTOR", "PHARMACY", "CAREGIVER", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, get("/patient/me/access-log")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, post("/patient/me/share-codes").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void aForgedTokenIsNotAccepted() throws Exception {
+        String forged = new JwtService() {
+            {
+                org.springframework.test.util.ReflectionTestUtils.setField(this, "secretKey", UUID.randomUUID() + UUID.randomUUID().toString());
+                org.springframework.test.util.ReflectionTestUtils.setField(this, "expirationMs", 60_000L);
+            }
+        }.generateToken("u-PATIENT", "PATIENT", "CID-7K3MQ9", null);
+
+        assertThat(statusOf(get("/patient/me/access-log").header("Authorization", "Bearer " + forged))).isIn(401, 403);
+    }
+}
