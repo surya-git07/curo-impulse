@@ -47,6 +47,14 @@ public class DoseScheduleService {
     @Autowired
     private Clock clock;
 
+    // 0 or less would mark every dose missed the moment it is due; more than a day would never alert in time
+    @jakarta.annotation.PostConstruct
+    void checkGrace() {
+        if (graceMinutes < 1 || graceMinutes > 1440) {
+            throw new IllegalStateException("MISSED_GRACE_MINUTES must be between 1 and 1440");
+        }
+    }
+
     public int graceMinutes() {
         return graceMinutes;
     }
@@ -94,8 +102,26 @@ public class DoseScheduleService {
         return doseLogRepository.deleteByPrescriptionIdAndStatusAndScheduledAtAfter(prescriptionId, DoseStatus.UPCOMING, clock.instant());
     }
 
-    /** Marks every UPCOMING dose that is more than the grace period overdue as MISSED. Safe to run again and again. */
+    /**
+     * Marks every UPCOMING dose that is at least the grace period overdue as MISSED, one atomic update per dose, and returns
+     * the doses this call changed (earliest first). A dose another run or the patient got to first is not included, so each
+     * dose is reported exactly once. Safe to run again and again.
+     */
+    public List<DoseLog> markMissedDoses() {
+        Instant cutoff = clock.instant().minus(Duration.ofMinutes(graceMinutes));
+        List<DoseLog> changed = new ArrayList<>();
+        doseLogRepository.findByStatusAndScheduledAtLessThanEqual(DoseStatus.UPCOMING, cutoff).stream()
+                .sorted(java.util.Comparator.comparing(DoseLog::getScheduledAt))
+                .forEach(d -> {
+                    if (doseUpdates.markMissed(d.getId())) {
+                        d.setStatus(DoseStatus.MISSED);
+                        changed.add(d);
+                    }
+                });
+        return changed;
+    }
+
     public long markMissed() {
-        return doseUpdates.markMissed(clock.instant().minus(Duration.ofMinutes(graceMinutes)));
+        return markMissedDoses().size();
     }
 }

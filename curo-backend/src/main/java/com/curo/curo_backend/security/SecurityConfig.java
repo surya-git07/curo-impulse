@@ -75,6 +75,8 @@ public class SecurityConfig {
                         .requestMatchers("/patient/me", "/patient/me/**").hasRole("PATIENT")
                         .requestMatchers("/doses/**").hasRole("PATIENT")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/medications").hasAnyRole("DOCTOR", "PHARMACY", "CAREGIVER")
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/dose-schedule").hasAnyRole("DOCTOR", "CAREGIVER")
+                        .requestMatchers("/caregiver-links", "/caregiver-links/**").hasAnyRole("PATIENT", "CAREGIVER")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/prescription/*/history").hasAnyRole("DOCTOR", "PHARMACY")
                         .requestMatchers("/auth/**", "/hospital/**", "/pharmacy-facility/**").permitAll()
                         .requestMatchers("/drugs/**").hasAnyRole("DOCTOR", "ADMIN", "PHARMACY")

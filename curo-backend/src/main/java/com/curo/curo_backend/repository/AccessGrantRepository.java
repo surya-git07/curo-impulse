@@ -9,5 +9,6 @@ import java.util.List;
 
 public interface AccessGrantRepository extends MongoRepository<AccessGrant, String> {
     List<AccessGrant> findByPatientIdAndGranteeIdAndStatus(String patientId, String granteeId, GrantStatus status);
+    List<AccessGrant> findByPatientIdAndRoleAndStatus(String patientId, String role, GrantStatus status);
     List<AccessGrant> findByPatientIdAndGranteeIdAndStatusIn(String patientId, String granteeId, Collection<GrantStatus> statuses);
 }

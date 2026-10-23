@@ -16,29 +16,40 @@ public class FakeDoseUpdates implements DoseUpdates {
         this.doses = doses;
     }
 
-    @Override
-    public boolean markTaken(String doseId, Instant takenAt, boolean late, String takenByUserId) {
-        for (DoseLog d : doses) {
-            if (doseId.equals(d.getId()) && d.getStatus() != DoseStatus.TAKEN) {
-                d.setStatus(DoseStatus.TAKEN);
-                d.setTakenAt(takenAt);
-                d.setLate(late);
-                d.setTakenByUserId(takenByUserId);
-                return true;
-            }
-        }
-        return false;
+    private DoseLog find(String id) {
+        return doses.stream().filter(d -> id.equals(d.getId())).findFirst().orElse(null);
     }
 
     @Override
-    public long markMissed(Instant cutoff) {
-        long changed = 0;
-        for (DoseLog d : doses) {
-            if (d.getStatus() == DoseStatus.UPCOMING && !d.getScheduledAt().isAfter(cutoff)) {
-                d.setStatus(DoseStatus.MISSED);
-                changed++;
-            }
+    public boolean markTaken(String doseId, Instant takenAt, boolean late, String takenByUserId) {
+        DoseLog d = find(doseId);
+        if (d == null || d.getStatus() == DoseStatus.TAKEN) {
+            return false;
         }
-        return changed;
+        d.setStatus(DoseStatus.TAKEN);
+        d.setTakenAt(takenAt);
+        d.setLate(late);
+        d.setTakenByUserId(takenByUserId);
+        return true;
+    }
+
+    @Override
+    public boolean markMissed(String doseId) {
+        DoseLog d = find(doseId);
+        if (d == null || d.getStatus() != DoseStatus.UPCOMING) {
+            return false;
+        }
+        d.setStatus(DoseStatus.MISSED);
+        return true;
+    }
+
+    @Override
+    public boolean markReminderSent(String doseId, Instant at) {
+        DoseLog d = find(doseId);
+        if (d == null || d.getReminderSentAt() != null) {
+            return false;
+        }
+        d.setReminderSentAt(at);
+        return true;
     }
 }

@@ -563,22 +563,31 @@ Example rows (illustrative only): `DRUG_DRUG, warfarin, nsaid, HIGH`; `DRUG_ALLE
 
 ## 10. Alerts, caregiver links, adherence, scheduler
 
-### Alerts
+### Alerts (as built)
+Every user has an inbox of their own alerts. Patients, caregivers and doctors all receive some. Each alert is stored first, then pushed through one `NotificationSender` (see Delivery below); a delivery failure is recorded on the alert and never loses it.
+
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `GET /alerts?unread=&page=&size=` | PATIENT, CAREGIVER | none | paged `[{id,type,careId,message,relatedId,createdAt,readAt}]`. CAREGIVER sees alerts for patients with an active link |
-| NEW | `POST /alerts/{id}/read` | PATIENT, CAREGIVER | none | alert with `readAt` set |
+| NEW | `GET /alerts?unread=&page=&size=` | any signed-in user (their own alerts only) | none | paged `[{id,type,patientCareId,message,doseId,prescriptionId,channel,status,sentAt,readAt}]`, newest first. `unread=true` hides read ones. `readAt` is absent while unread |
+| NEW | `POST /alerts/{id}/read` | the recipient | none | the alert with `readAt` set (the first read time is kept). Someone else's alert is `404 ALERT_NOT_FOUND` |
 
-`type`: `DOSE_REMINDER`, `MISSED_DOSE`, `GRANT_REQUEST`, `CAREGIVER_REQUEST`, `PRESCRIPTION_CHANGED`. Alerts are stored and also pushed through the patient's registered push token (SNS / Expo). No clinician alerts in the MVP.
+- `type`: `UPCOMING_DOSE` (reminder to the patient), `MISSED_DOSE`, `ADHERENCE` (escalation). The earlier `DOSE_REMINDER`, `GRANT_REQUEST`, `CAREGIVER_REQUEST` and `PRESCRIPTION_CHANGED` types are not built.
+- `channel`: `EMAIL` when sent through Amazon SNS, `LOG` when SNS is not configured. `status`: `SENT` (handed to the delivery service) or `FAILED`.
+- `message` is the inbox text and may name the drug and the patient. **What is sent outside the app never does**: the email only says that a dose is due or was missed, and for whom by CareID.
 
-### Caregiver link
-A caregiver link is a request to hold a standing `CAREGIVER` AccessGrant on one patient.
+### Caregiver link (as built)
+A patient adds a caregiver by the caregiver's CareID. This replaces the earlier request-and-approve flow: the patient is the one who consents, and the caregiver can step down at any time.
+
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `POST /caregiver-links` | CAREGIVER | `{careId}` or `{shareCode}` (same share code mechanism, section 3), plus optional `relationship` | link `{id,careId,caregiverId,relationship,status:"PENDING"}`. With a share code, created `ACTIVE`. A `CAREGIVER_REQUEST` alert goes to the patient |
-| NEW | `POST /caregiver-links/{id}/approve` | PATIENT (owner) | `{scope?}` (default `MEDICATIONS`, `DOSES`; may include `PROFILE`) | link `ACTIVE` plus its `grantId`; the AccessGrant (`type:"CAREGIVER"`, no expiry) is created |
-| NEW | `POST /caregiver-links/{id}/revoke` | PATIENT (owner) or the CAREGIVER | none | link `REVOKED`; the grant is revoked at the same time |
-| NEW | `GET /caregiver-links` | PATIENT, CAREGIVER | none | `[link]`: the patient's links, or the caregiver's links |
+| CHANGE | `POST /caregiver-links` | PATIENT | `{careId, relationship?}` (the caregiver's CareID) | `201 {id,patientCareId,patientName,caregiverCareId,caregiverName,relationship,status:"ACTIVE",createdAt}`. `404 CAREGIVER_NOT_FOUND` for an unknown CareID **or one that is not a caregiver account** (the same answer for both); `409 LINK_EXISTS` |
+| CHANGE | `GET /caregiver-links` | PATIENT, CAREGIVER | none | `[link]`: a patient sees the caregivers they added, a caregiver the patients who added them |
+| CHANGE | `POST /caregiver-links/{id}/revoke` | PATIENT or the CAREGIVER on that link | none | link `REVOKED`; the caregiver's access ends at once. Doing it again changes nothing. A link that is not yours is `404 LINK_NOT_FOUND` |
+| DROP | `POST /caregiver-links/{id}/approve` | | | no approval step |
+
+Adding a caregiver creates a standing `CAREGIVER` AccessGrant with **only the `MEDICATIONS` and `DOSES` scopes** and no end date. So a caregiver can read the patient's medication list and dose schedule (`GET /patient/{careId}/medications`, `GET /patient/{careId}/dose-schedule`) and receives their missed-dose alerts, but **cannot read prescriptions or the profile (allergies), and cannot prescribe**: issuing, modifying and discontinuing are refused for the CAREGIVER role (`403 FORBIDDEN_ROLE`) even if a grant were widened.
+
+`GET /patient/{careId}/dose-schedule?from=&to=` (DOCTOR, CAREGIVER; grant `MEDICATIONS`; every read is audited as `DOSE_SCHEDULE`): doses in `[from, to)`; default is the next 7 days from the start of today (Indian time); at most 31 days, else `400 VALIDATION_ERROR`.
 
 ### Adherence report
 | Status | Method + path | Auth | Request | Response |
@@ -600,14 +609,21 @@ A caregiver link is a request to hold a standing `CAREGIVER` AccessGrant on one 
 ### Scheduler endpoint (EventBridge only)
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| NEW | `POST /internal/scheduler/dose-tick` | **`X-Internal-Key` header** (env `INTERNAL_API_KEY`), no JWT, never called by app clients | `{ "task": "ALL" }` where `task` is `REMINDERS`, `MISSED` or `ALL` (default `ALL`) | `{ "remindersSent": 0, "markedMissed": 2, "alertsCreated": 0 }`. 401 `INVALID_KEY` for a missing or wrong key, and for every call if `INTERNAL_API_KEY` is not set; 400 for an unknown `task`. **As built only `MISSED` does work**; `REMINDERS` is accepted and does nothing until alerts exist |
+| NEW | `POST /internal/scheduler/dose-tick` | **`X-Internal-Key` header** (env `INTERNAL_API_KEY`), no JWT, never called by app clients | `{ "task": "ALL" }` where `task` is `REMINDERS`, `MISSED` or `ALL` (default `ALL`) | `{ "remindersSent": 2, "markedMissed": 3, "alertsCreated": 9 }` (`alertsCreated` counts reminders, missed-dose alerts and escalations). 401 `INVALID_KEY` for a missing or wrong key, and for every call if `INTERNAL_API_KEY` is not set; 400 for an unknown `task` |
 
 - Called by an EventBridge rule (proposed `rate(5 minutes)`) through an API destination. The key lives in the EventBridge connection and in the server env, never in source or this file. Missing or wrong key: 401.
-- `REMINDERS`: for every `UPCOMING` dose due within the reminder lead time (proposed 10 min) with no reminder yet, create a `DOSE_REMINDER` alert and push to the patient.
-- `MISSED`: every `UPCOMING` dose that is 30 minutes (`doses.missed-grace-minutes`) or more past `scheduledAt` becomes `MISSED`, in one atomic update that never touches a `TAKEN` dose. The `MISSED_DOSE` alert to the patient and caregivers comes with alerts.
+- `REMINDERS`: for every `UPCOMING` dose due within the next 10 minutes (`alerts.reminder-lead-minutes`) that has not had a reminder, send an `UPCOMING_DOSE` alert to the patient. With a tick every 5 minutes it lands 5 to 10 minutes before the dose. The reminder is claimed with one atomic update (`reminderSentAt`), so overlapping runs never remind twice. Only the patient is reminded.
+- `MISSED`: every `UPCOMING` dose that is at least the grace period (default 30 minutes; set `MISSED_GRACE_MINUTES`, 1 to 1440) past `scheduledAt` becomes `MISSED`, in one atomic update that never touches a `TAKEN` dose. On each dose this call marks (and only those), `MISSED_DOSE` alerts go to the patient, to every caregiver with an active caregiver grant covering `DOSES`, and to the prescribing doctor **only while that doctor holds an active grant covering `DOSES`** (without consent they are not told). A dose the patient took first is never alerted.
+- **Escalation:** when a miss makes it `alerts.escalation-consecutive-misses` (default 3) misses in a row for the same prescription, and again at every multiple (6, 9, ...), an `ADHERENCE` alert goes to the same recipients. A taken dose resets the count; other prescriptions do not count. Several misses found in one tick escalate once.
 - Idempotent: a dose only moves `UPCOMING` to `MISSED` once, so retries, duplicate deliveries and overlapping runs change nothing the second time.
 - The shared secret is compared in constant time and is never logged or returned.
 - Ownership: the Spring side is Vasuki's; the EventBridge rule, API destination and key are Surya's (infra/).
+
+### Delivery (as built)
+All outside messages go through one `NotificationSender` interface, so alert logic never knows how they are sent.
+- **Amazon SNS** is used when `ALERTS_SNS_TOPIC_ARN` is set (`AWS_REGION` optional). Messages are published to that topic, whose email subscribers receive them. Each message carries `recipientCareId` and `alertType` as message attributes so a subscription filter policy can route it to one person. AWS credentials come from the standard provider chain (environment variables or an instance role); none are read from this app's config. Creating and filtering the per-person email subscriptions is infrastructure work (Surya) and is not built.
+- **Logging fallback** is used when SNS is not configured, or the SNS client cannot be created: the notification is written to the server log instead and the alert shows `channel: LOG`. The app starts and works either way.
+- Failures log the exception type only, never the topic ARN or message details.
 
 ## 11. Pharmacy and drugs
 
@@ -697,7 +713,7 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 17. **A doctor with only a `PRESCRIPTIONS` grant still sees allergy warnings** when issuing, because an allergy conflict is safety-critical. The allergy list itself (`PROFILE` scope) is not shown to them.
 18. **`POST /checks/interaction` is not built yet.** The check runs on issue only; the standalone endpoint, the dose schedule, QR/group dispensing and the `PRESCRIPTION_CHANGED` alert come later. `/ai/risk-score` and the old `/prescription/*` pharmacy endpoints remain in the disabled legacy code under `/legacy/prescription`.
 19. **Patient profile:** only allergies are stored. Name changes, conditions, date of birth and blood group (and so `ageYears` and `gender` on `/careid`) are still to do.
-20. **Reminders and the `MISSED_DOSE` alert are not built.** The scheduler endpoint marks doses missed but tells no one. Caregiver marking of doses, the grant-gated clinician view of a patient's doses, and the adherence report also wait for alerts and caregiver links.
+20. **Alerts: what is and is not built.** Upcoming-dose reminders, missed-dose alerts and escalation are built. Caregiver marking of doses, the doctor-facing adherence report and alerts for grant requests or prescription changes are not.
 21. **Rolling 30-day horizon for open-ended prescriptions** is never topped up. A prescription with no end date runs out of doses after 30 days unless it is modified. A nightly top-up in the scheduler tick would fix it.
 22. **Doses start at the issue date**, not the dispense date, because dispensing is not tracked yet.
 23. **Pharmacy approval does not yet make a PENDING pharmacy visible.** Approving the account (SUPER_ADMIN review, not built) must also set the pharmacy record verified.
@@ -705,3 +721,7 @@ Also dropped (not ABDM): `POST /auth/send-otp` and `POST /auth/reset-password` (
 25. **Stock history and `GET /pharmacy/log/{pharmacyId}`** are not built: dispenses and rejections are recorded, but there is no log endpoint, and stock changes are not recorded individually.
 26. **One dispense per prescription.** There is no refill concept yet, so a second fill is refused. Confirm, or add repeats.
 27. **Demo pharmacies cannot be logged into.** To dispense in development, sign up a PHARMACY account (its stock starts empty; set it with `PUT /pharmacy/stock/{id}`).
+28. **Email has no per-person routing yet.** SNS publishes to one topic; delivering to the right person needs an email subscription with a filter on `recipientCareId` for each user, and users have no email address on file. Until then outside notifications reach only whoever subscribed to the topic.
+29. **A doctor is alerted only with a `DOSES` grant.** The prescribing doctor does not get missed-dose alerts without one. Confirm, or give prescribers a default dose-alert consent when a patient approves their first request.
+30. **Caregivers are added by CareID with no confirmation from the caregiver**, and a "not found" answer reveals whether a CareID belongs to a caregiver account. Confirm, or add an accept step and rate limiting.
+31. **Thresholds:** escalation after 3 consecutive misses per prescription and a 10-minute reminder lead are settings (`alerts.*`). Confirm the defaults.

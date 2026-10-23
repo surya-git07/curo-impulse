@@ -4,6 +4,8 @@ import com.curo.curo_backend.dto.DoseView;
 import com.curo.curo_backend.dto.PagedResponse;
 import com.curo.curo_backend.dto.TakenRequest;
 import com.curo.curo_backend.model.AppUser;
+import com.curo.curo_backend.model.AuditAction;
+import com.curo.curo_backend.model.GrantScope;
 import com.curo.curo_backend.model.DoseLog;
 import com.curo.curo_backend.model.DoseStatus;
 import com.curo.curo_backend.model.Prescription;
@@ -53,6 +55,9 @@ public class DoseService {
     private PrescriptionRepository prescriptionRepository;
 
     @Autowired
+    private AccessGuard accessGuard;
+
+    @Autowired
     private MongoTemplate mongoTemplate;
 
     @Autowired
@@ -67,6 +72,22 @@ public class DoseService {
         Instant to = day.plusDays(1).atStartOfDay(zone).toInstant();
         return views(doseLogRepository.findByPatientIdAndScheduledAtGreaterThanEqualAndScheduledAtLessThanOrderByScheduledAt(
                 patient.getId(), from, to));
+    }
+
+    /**
+     * Someone else dose schedule (a caregiver, or a doctor): needs an active grant covering MEDICATIONS, and the read is audited.
+     * Defaults to the next 7 days from the start of today (local time); at most 31 days at a time.
+     */
+    public List<DoseView> scheduleFor(String careId, Instant from, Instant to) {
+        AccessGuard.Granted granted = accessGuard.require(careId, GrantScope.MEDICATIONS, AuditAction.READ, "DOSE_SCHEDULE", careId);
+        ZoneId zone = ZoneId.of(timeZone);
+        Instant start = from != null ? from : clock.instant().atZone(zone).toLocalDate().atStartOfDay(zone).toInstant();
+        Instant end = to != null ? to : start.plus(Duration.ofDays(7));
+        if (!end.isAfter(start) || Duration.between(start, end).compareTo(Duration.ofDays(31)) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "from must be before to, and the range at most 31 days.");
+        }
+        return views(doseLogRepository.findByPatientIdAndScheduledAtGreaterThanEqualAndScheduledAtLessThanOrderByScheduledAt(
+                granted.patient().getId(), start, end));
     }
 
     public DoseView markTaken(String doseId, TakenRequest request) {

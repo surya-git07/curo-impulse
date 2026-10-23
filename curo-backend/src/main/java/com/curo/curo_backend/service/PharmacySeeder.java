@@ -11,11 +11,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
+import org.springframework.core.annotation.Order;
 
 import java.time.Clock;
 
 /** Fills pharmacies and pharmacy_stock with the demo data. Adds what is missing, never overwrites, and never stops the app starting. */
 @Component
+@Order(10)
 public class PharmacySeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(PharmacySeeder.class);

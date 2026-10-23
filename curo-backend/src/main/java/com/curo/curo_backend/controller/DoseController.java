@@ -37,6 +37,14 @@ public class DoseController {
         return doseService.log(from, to, status, page, size);
     }
 
+    // A caregiver or doctor reading a patient schedule: needs an active grant (403 NO_ACTIVE_GRANT otherwise)
+    @GetMapping("/patient/{careId}/dose-schedule")
+    public List<DoseView> schedule(@PathVariable String careId,
+                                   @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+                                   @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to) {
+        return doseService.scheduleFor(careId, from, to);
+    }
+
     @PostMapping("/doses/{id}/taken")
     public DoseView taken(@PathVariable String id, @RequestBody(required = false) TakenRequest request) {
         return doseService.markTaken(id, request);

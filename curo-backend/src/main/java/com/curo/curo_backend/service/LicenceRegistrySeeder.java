@@ -10,9 +10,11 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.core.annotation.Order;
 
 /** Fills licence_registry with the invented records on startup. Adds missing records only, never overwrites. */
 @Component
+@Order(10)
 @ConditionalOnProperty(name = "licence.verification.mode", havingValue = "mock", matchIfMissing = true)
 public class LicenceRegistrySeeder implements ApplicationRunner {
 

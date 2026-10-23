@@ -1,6 +1,6 @@
 package com.curo.curo_backend.controller;
 
-import com.curo.curo_backend.service.DoseScheduleService;
+import com.curo.curo_backend.service.DoseAlertService;
 import com.curo.curo_backend.service.InternalKeyVerifier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,29 +25,31 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SchedulerControllerTest {
 
     private final String key = UUID.randomUUID().toString(); // made up per run, not a real secret
-    private DoseScheduleService doses;
+    private DoseAlertService alerts;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        doses = mock(DoseScheduleService.class);
-        when(doses.markMissed()).thenReturn(3L);
+        alerts = mock(DoseAlertService.class);
+        when(alerts.sendReminders()).thenReturn(2L);
+        when(alerts.processMissed()).thenReturn(new DoseAlertService.MissedResult(3, 7));
         InternalKeyVerifier verifier = new InternalKeyVerifier();
         ReflectionTestUtils.setField(verifier, "configuredKey", key);
         SchedulerController controller = new SchedulerController();
         ReflectionTestUtils.setField(controller, "keyVerifier", verifier);
-        ReflectionTestUtils.setField(controller, "doseScheduleService", doses);
+        ReflectionTestUtils.setField(controller, "doseAlertService", alerts);
         mvc = MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new ApiExceptionHandler()).build();
     }
 
     @Test
-    void theRightKeyRunsTheJobAndReportsTheCount() throws Exception {
+    void theRightKeyRunsBothTasksAndReportsTheCounts() throws Exception {
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.remindersSent").value(2))
                 .andExpect(jsonPath("$.markedMissed").value(3))
-                .andExpect(jsonPath("$.remindersSent").value(0))
-                .andExpect(jsonPath("$.alertsCreated").value(0));
-        verify(doses).markMissed();
+                .andExpect(jsonPath("$.alertsCreated").value(9)); // 2 reminders + 7 missed-dose and escalation alerts
+        verify(alerts).sendReminders();
+        verify(alerts).processMissed();
     }
 
     @Test
@@ -58,7 +60,7 @@ class SchedulerControllerTest {
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key + "x")).andExpect(status().isUnauthorized());
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key.toUpperCase())).andExpect(status().isUnauthorized());
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", "")).andExpect(status().isUnauthorized());
-        verifyNoInteractions(doses);
+        verifyNoInteractions(alerts);
     }
 
     @Test
@@ -74,30 +76,45 @@ class SchedulerControllerTest {
         ReflectionTestUtils.setField(unconfigured, "configuredKey", "");
         SchedulerController controller = new SchedulerController();
         ReflectionTestUtils.setField(controller, "keyVerifier", unconfigured);
-        ReflectionTestUtils.setField(controller, "doseScheduleService", doses);
+        ReflectionTestUtils.setField(controller, "doseAlertService", alerts);
         MockMvc open = MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new ApiExceptionHandler()).build();
 
         open.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", "")).andExpect(status().isUnauthorized());
         open.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", "anything")).andExpect(status().isUnauthorized());
         open.perform(post("/internal/scheduler/dose-tick")).andExpect(status().isUnauthorized());
-        verifyNoInteractions(doses);
+        verifyNoInteractions(alerts);
     }
 
     @Test
-    void theTaskCanBeChosen() throws Exception {
+    void theMissedTaskAloneSendsNoReminders() throws Exception {
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"task\":\"MISSED\"}")).andExpect(status().isOk());
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"task\":\"MISSED\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.remindersSent").value(0))
+                .andExpect(jsonPath("$.markedMissed").value(3))
+                .andExpect(jsonPath("$.alertsCreated").value(7));
+        verify(alerts, never()).sendReminders();
+    }
+
+    @Test
+    void theRemindersTaskAloneMarksNothingMissed() throws Exception {
+        mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"task\":\"reminders\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.remindersSent").value(2))
+                .andExpect(jsonPath("$.markedMissed").value(0))
+                .andExpect(jsonPath("$.alertsCreated").value(2));
+        verify(alerts, never()).processMissed();
+    }
+
+    @Test
+    void allIsTheDefaultAndCanBeSaidOutLoud() throws Exception {
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"task\":\"all\"}")).andExpect(status().isOk());
-        verify(doses, times(2)).markMissed();
-    }
-
-    @Test
-    void remindersAloneDoNotMarkAnythingMissed() throws Exception {
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key)
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"task\":\"REMINDERS\"}"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.markedMissed").value(0));
-        verify(doses, never()).markMissed();
+                .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isOk());
+        verify(alerts, times(2)).processMissed();
+        verify(alerts, times(2)).sendReminders();
     }
 
     @Test
@@ -105,7 +122,7 @@ class SchedulerControllerTest {
         mvc.perform(post("/internal/scheduler/dose-tick").header("X-Internal-Key", key)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"task\":\"DELETE_EVERYTHING\"}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("VALIDATION_ERROR"));
-        verifyNoInteractions(doses);
+        verifyNoInteractions(alerts);
     }
 
     @Test

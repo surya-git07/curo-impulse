@@ -26,8 +26,15 @@ public class MongoDoseUpdates implements DoseUpdates {
     }
 
     @Override
-    public long markMissed(Instant cutoff) {
-        Query query = Query.query(Criteria.where("status").is(DoseStatus.UPCOMING).and("scheduledAt").lte(cutoff));
-        return mongoTemplate.updateMulti(query, new Update().set("status", DoseStatus.MISSED), DoseLog.class).getModifiedCount();
+    public boolean markMissed(String doseId) {
+        Query query = Query.query(Criteria.where("id").is(doseId).and("status").is(DoseStatus.UPCOMING));
+        return mongoTemplate.updateFirst(query, new Update().set("status", DoseStatus.MISSED), DoseLog.class).getModifiedCount() > 0;
+    }
+
+    @Override
+    public boolean markReminderSent(String doseId, Instant at) {
+        // reminderSentAt is null: the same operation that checks it also sets it
+        Query query = Query.query(Criteria.where("id").is(doseId).and("reminderSentAt").is(null));
+        return mongoTemplate.updateFirst(query, new Update().set("reminderSentAt", at), DoseLog.class).getModifiedCount() > 0;
     }
 }

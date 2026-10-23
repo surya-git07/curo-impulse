@@ -61,19 +61,48 @@ class MongoDoseUpdatesTest {
     }
 
     @Test
-    void markMissedOnlyTouchesUpcomingDosesDueByTheCutoff() {
-        UpdateResult result3 = modified(3);
-        when(template.updateMulti(any(Query.class), any(Update.class), eq(DoseLog.class))).thenReturn(result3);
+    void markMissedOnlyTouchesThisDoseWhileItIsStillUpcoming() {
+        UpdateResult one = modified(1);
+        when(template.updateFirst(any(Query.class), any(Update.class), eq(DoseLog.class))).thenReturn(one);
 
-        assertThat(updates.markMissed(Instant.parse("2026-10-23T09:30:00Z"))).isEqualTo(3);
+        assertThat(updates.markMissed("d1")).isTrue();
 
         ArgumentCaptor<Query> q = ArgumentCaptor.forClass(Query.class);
         ArgumentCaptor<Update> u = ArgumentCaptor.forClass(Update.class);
-        verify(template).updateMulti(q.capture(), u.capture(), eq(DoseLog.class));
+        verify(template).updateFirst(q.capture(), u.capture(), eq(DoseLog.class));
         String filter = q.getValue().getQueryObject().toString();
-        assertThat(filter).contains("UPCOMING").contains("$lte").contains("2026-10-23T09:30:00Z");
-        assertThat(filter).doesNotContain("TAKEN");
+        assertThat(filter).contains("d1").contains("UPCOMING").doesNotContain("TAKEN");
         String change = u.getValue().getUpdateObject().toString();
         assertThat(change).contains("MISSED").doesNotContain("takenAt");
+    }
+
+    @Test
+    void markMissedReportsFalseWhenTheDoseWasNoLongerUpcoming() {
+        UpdateResult none = modified(0);
+        when(template.updateFirst(any(Query.class), any(Update.class), eq(DoseLog.class))).thenReturn(none);
+
+        assertThat(updates.markMissed("d1")).isFalse();
+    }
+
+    @Test
+    void theReminderIsClaimedOnlyWhileNoneWasSentBefore() {
+        UpdateResult one = modified(1);
+        when(template.updateFirst(any(Query.class), any(Update.class), eq(DoseLog.class))).thenReturn(one);
+
+        assertThat(updates.markReminderSent("d1", Instant.parse("2026-10-23T10:00:00Z"))).isTrue();
+
+        ArgumentCaptor<Query> q = ArgumentCaptor.forClass(Query.class);
+        ArgumentCaptor<Update> u = ArgumentCaptor.forClass(Update.class);
+        verify(template).updateFirst(q.capture(), u.capture(), eq(DoseLog.class));
+        assertThat(q.getValue().getQueryObject().toString()).contains("d1").contains("reminderSentAt");
+        assertThat(u.getValue().getUpdateObject().toString()).contains("reminderSentAt").contains("2026-10-23T10:00:00Z");
+    }
+
+    @Test
+    void aReminderAlreadySentReportsFalse() {
+        UpdateResult none = modified(0);
+        when(template.updateFirst(any(Query.class), any(Update.class), eq(DoseLog.class))).thenReturn(none);
+
+        assertThat(updates.markReminderSent("d1", Instant.now())).isFalse();
     }
 }

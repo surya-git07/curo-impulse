@@ -171,6 +171,32 @@ class AccessRoutesSecurityTest {
     }
 
     @Test
+    void theAlertAndCaregiverRoutesNeedALogin() throws Exception {
+        assertThat(statusOf(get("/alerts"))).isIn(401, 403);
+        assertThat(statusOf(post("/alerts/a1/read"))).isIn(401, 403);
+        assertThat(statusOf(get("/caregiver-links"))).isIn(401, 403);
+        assertThat(statusOf(post("/caregiver-links").contentType("application/json").content("{}"))).isIn(401, 403);
+        assertThat(statusOf(post("/caregiver-links/l1/revoke"))).isIn(401, 403);
+        assertThat(statusOf(get("/patient/CID-7K3MQ9/dose-schedule"))).isIn(401, 403);
+    }
+
+    @Test
+    void caregiverLinksAreForPatientsAndCaregiversOnly() throws Exception {
+        for (String role : new String[]{"DOCTOR", "PHARMACY", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, get("/caregiver-links")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, post("/caregiver-links").contentType("application/json").content("{}")))).as(role).isEqualTo(403);
+            assertThat(statusOf(as(role, post("/caregiver-links/l1/revoke")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
+    void aPatientCannotReadSomeoneElsesDoseScheduleAndPharmaciesHaveNoWayIn() throws Exception {
+        for (String role : new String[]{"PATIENT", "PHARMACY", "ADMIN", "SUPER_ADMIN"}) {
+            assertThat(statusOf(as(role, get("/patient/CID-7K3MQ9/dose-schedule")))).as(role).isEqualTo(403);
+        }
+    }
+
+    @Test
     void aForgedTokenIsNotAccepted() throws Exception {
         String forged = new JwtService() {
             {

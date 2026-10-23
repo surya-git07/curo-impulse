@@ -156,4 +156,24 @@ class MissedDoseJobTest {
         assertThat(job.markMissed()).isZero();
         assertThat(byId("d1").getStatus()).isEqualTo(DoseStatus.TAKEN);
     }
+
+    @Test
+    void theGraceMustBeBetweenOneMinuteAndOneDay() {
+        for (int bad : new int[]{0, -5, 1441}) {
+            org.springframework.test.util.ReflectionTestUtils.setField(job, "graceMinutes", bad);
+            org.assertj.core.api.Assertions.assertThatThrownBy(job::checkGrace).isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("MISSED_GRACE_MINUTES");
+        }
+        for (int ok : new int[]{1, 30, 1440}) {
+            org.springframework.test.util.ReflectionTestUtils.setField(job, "graceMinutes", ok);
+            job.checkGrace();
+        }
+    }
+
+    @Test
+    void theShippedConfigurationReadsTheEnvVarWithADefaultOf30() throws Exception {
+        String properties = java.nio.file.Files.readString(java.nio.file.Path.of("src/main/resources/application.properties"));
+
+        assertThat(properties).contains("doses.missed-grace-minutes=${MISSED_GRACE_MINUTES:30}");
+    }
 }

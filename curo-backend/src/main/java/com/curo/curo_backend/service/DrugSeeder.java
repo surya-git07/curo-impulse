@@ -9,9 +9,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
+import org.springframework.core.annotation.Order;
 
 /** Fills drug_master on startup. Adds missing drugs only, never overwrites, and never stops the app from starting. */
 @Component
+@Order(10)
 public class DrugSeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DrugSeeder.class);

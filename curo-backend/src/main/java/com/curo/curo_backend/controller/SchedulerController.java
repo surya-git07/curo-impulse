@@ -3,7 +3,7 @@ package com.curo.curo_backend.controller;
 import com.curo.curo_backend.dto.TickRequest;
 import com.curo.curo_backend.dto.TickResponse;
 import com.curo.curo_backend.service.ApiException;
-import com.curo.curo_backend.service.DoseScheduleService;
+import com.curo.curo_backend.service.DoseAlertService;
 import com.curo.curo_backend.service.InternalKeyVerifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,7 +33,7 @@ public class SchedulerController {
     private InternalKeyVerifier keyVerifier;
 
     @Autowired
-    private DoseScheduleService doseScheduleService;
+    private DoseAlertService doseAlertService;
 
     @PostMapping("/dose-tick")
     public TickResponse doseTick(@RequestHeader(value = "X-Internal-Key", required = false) String key,
@@ -48,11 +48,19 @@ public class SchedulerController {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "task must be REMINDERS, MISSED or ALL.");
         }
 
+        long reminders = 0;
         long missed = 0;
-        if (!"REMINDERS".equals(task)) {
-            missed = doseScheduleService.markMissed();
-            log.info("dose tick: {} dose(s) marked MISSED", missed);
+        long alerts = 0;
+        if (!"MISSED".equals(task)) {
+            reminders = doseAlertService.sendReminders();
+            alerts += reminders;
         }
-        return new TickResponse(0, missed, 0);
+        if (!"REMINDERS".equals(task)) {
+            DoseAlertService.MissedResult result = doseAlertService.processMissed();
+            missed = result.markedMissed();
+            alerts += result.alertsCreated();
+        }
+        log.info("dose tick: {} reminder(s), {} dose(s) marked MISSED, {} alert(s) created", reminders, missed, alerts);
+        return new TickResponse(reminders, missed, alerts);
     }
 }

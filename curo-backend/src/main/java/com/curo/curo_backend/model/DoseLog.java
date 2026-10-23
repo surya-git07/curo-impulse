@@ -37,6 +37,9 @@ public class DoseLog {
     // taken more than the grace period after it was due
     private boolean late;
 
+    // set once when the upcoming-dose reminder has been sent, so overlapping scheduler runs never remind twice
+    private Instant reminderSentAt;
+
     private String takenByUserId;
 
     private Instant createdAt;
