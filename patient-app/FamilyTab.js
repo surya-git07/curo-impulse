@@ -1,87 +1,176 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import {
+  RELATIONS, GENDERS, ID_TYPES, BLANK_MEMBER,
+  toForm, fromForm, validateMember, addMember, updateMember, removeMember,
+} from './familyLogic';
+import { colors, type, card as cardStyle, shadow } from './theme';
 
-const TEAL = '#0d7377';
+// Family members tab (local state, lifted into App so it survives tab switches).
+// members / onChange come from App; there is no backend family endpoint yet.
+export default function FamilyTab({ members, onChange }) {
+  const [form, setForm] = useState(null);          // null = closed; otherwise the open add/edit form
+  const [editingId, setEditingId] = useState(null); // null = adding
+  const [error, setError] = useState('');
+  const [confirmId, setConfirmId] = useState(null); // member awaiting delete confirmation
 
-// Simple appointment-booking tab (mock). Pick a doctor and a slot, then "book".
-const DOCTORS = [
-  { id: 'doc1', name: 'Dr. Mehta', dept: 'General Medicine', hospital: 'Kaveri Hospital' },
-  { id: 'doc2', name: 'Dr. Rao', dept: 'Diabetology', hospital: 'City Clinic' },
-];
+  const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
-const SLOTS = ['Today 5:00 PM', 'Tomorrow 10:30 AM', 'Tomorrow 4:00 PM'];
+  const openAdd = () => { setEditingId(null); setForm({ ...BLANK_MEMBER }); setError(''); setConfirmId(null); };
+  const openEdit = (m) => { setEditingId(m.id); setForm(toForm(m)); setError(''); setConfirmId(null); };
+  const close = () => { setForm(null); setEditingId(null); setError(''); };
 
-export default function BookTab() {
-  const [doctor, setDoctor] = useState(null);
-  const [slot, setSlot] = useState(null);
-  const [booked, setBooked] = useState(null);
-
-  const book = () => {
-    if (!doctor || !slot) return Alert.alert('Pick a doctor and a time slot first');
-    setBooked({ doctor, slot });
+  const save = () => {
+    const problem = validateMember(form);
+    if (problem) return setError(problem);
+    const fields = fromForm(form);
+    onChange(editingId ? updateMember(members, editingId, fields) : addMember(members, fields));
+    close();
   };
 
-  if (booked) {
-    return (
-      <View style={styles.wrap}>
-        <View style={styles.confirmCard}>
-          <Text style={styles.confirmTick}>✓</Text>
-          <Text style={styles.confirmTitle}>Appointment booked</Text>
-          <Text style={styles.confirmText}>
-            {booked.doctor.name} · {booked.doctor.dept}{'\n'}{booked.slot}
-          </Text>
-        </View>
-        <TouchableOpacity style={styles.button} onPress={() => { setBooked(null); setDoctor(null); setSlot(null); }}>
-          <Text style={styles.buttonText}>Book another</Text>
+  const remove = (id) => { onChange(removeMember(members, id)); setConfirmId(null); if (editingId === id) close(); };
+
+  const chips = (key, options) => (
+    <View style={styles.chipRow}>
+      {options.map((o) => (
+        <TouchableOpacity key={o} style={[styles.chip, form[key] === o && styles.chipOn]} onPress={() => set(key, o)}>
+          <Text style={[styles.chipText, form[key] === o && styles.chipTextOn]}>{o}</Text>
         </TouchableOpacity>
-      </View>
-    );
-  }
+      ))}
+    </View>
+  );
+
+  const input = (key, label, extra = {}) => (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput style={styles.input} placeholderTextColor={colors.placeholder} value={form[key]} onChangeText={(t) => set(key, t)} {...extra} />
+    </View>
+  );
 
   return (
-    <ScrollView contentContainerStyle={styles.wrap}>
-      <Text style={styles.label}>Choose a doctor</Text>
-      {DOCTORS.map((d) => (
-        <TouchableOpacity
-          key={d.id}
-          style={[styles.option, doctor?.id === d.id && styles.optionActive]}
-          onPress={() => setDoctor(d)}
-        >
-          <Text style={[styles.optionTitle, doctor?.id === d.id && styles.optionTitleActive]}>{d.name}</Text>
-          <Text style={styles.optionSub}>{d.dept} · {d.hospital}</Text>
-        </TouchableOpacity>
-      ))}
+    <ScrollView contentContainerStyle={styles.wrap} keyboardShouldPersistTaps="handled">
+      {form ? (
+        <View style={styles.formCard}>
+          <Text style={styles.formTitle}>{editingId ? 'Edit family member' : 'Add family member'}</Text>
 
-      <Text style={[styles.label, { marginTop: 16 }]}>Choose a time</Text>
-      {SLOTS.map((s) => (
-        <TouchableOpacity
-          key={s}
-          style={[styles.option, slot === s && styles.optionActive]}
-          onPress={() => setSlot(s)}
-        >
-          <Text style={[styles.optionTitle, slot === s && styles.optionTitleActive]}>{s}</Text>
-        </TouchableOpacity>
-      ))}
+          <View style={styles.field}>
+            <Text style={styles.label}>Relation</Text>
+            {chips('relation', RELATIONS)}
+          </View>
+          {input('name', 'Full name', { placeholder: 'e.g. Lakshmi Rao' })}
+          <View style={styles.field}>
+            <Text style={styles.label}>Identify them by</Text>
+            {chips('idType', ID_TYPES)}
+          </View>
+          {input('idValue', form.idType === 'CareID' ? 'CareID' : 'Phone number', {
+            placeholder: form.idType === 'CareID' ? 'CID-AB12CD' : '10-digit number',
+            autoCapitalize: form.idType === 'CareID' ? 'characters' : 'none',
+            keyboardType: form.idType === 'Phone' ? 'number-pad' : 'default',
+            autoCorrect: false,
+          })}
+          {input('age', 'Age (optional)', { keyboardType: 'number-pad' })}
+          <View style={styles.field}>
+            <Text style={styles.label}>Gender (optional)</Text>
+            {chips('gender', GENDERS)}
+          </View>
+          {input('bloodGroup', 'Blood group (optional)', { placeholder: 'e.g. B+', autoCapitalize: 'characters' })}
+          {input('allergiesText', 'Allergies (optional)', { placeholder: 'Comma separated, empty if none' })}
+          {input('conditions', 'Ongoing conditions (optional)', { placeholder: 'e.g. Hypertension' })}
 
-      <TouchableOpacity style={[styles.button, { marginTop: 20 }]} onPress={book}>
-        <Text style={styles.buttonText}>Book appointment</Text>
-      </TouchableOpacity>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <TouchableOpacity style={styles.button} onPress={save}>
+            <Text style={styles.buttonText}>{editingId ? 'Save changes' : 'Add member'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={close}><Text style={styles.link}>Cancel</Text></TouchableOpacity>
+        </View>
+      ) : (
+        <>
+          <TouchableOpacity style={styles.button} onPress={openAdd}>
+            <Text style={styles.buttonText}>＋  Add family member</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.heading}>Family members ({members.length})</Text>
+          {members.length === 0 ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>👪</Text>
+              <Text style={styles.emptyTitle}>No family members yet</Text>
+              <Text style={styles.emptySub}>Add someone to keep their medicines in one place.</Text>
+            </View>
+          ) : members.map((m) => (
+            <View key={m.id} style={styles.card}>
+              <View style={styles.cardTop}>
+                <View style={styles.avatar}><Text style={styles.avatarText}>{(m.name || '?').charAt(0).toUpperCase()}</Text></View>
+                <Text style={styles.name}>{m.name}</Text>
+                <View style={styles.relationTag}><Text style={styles.relationText}>{m.relation}</Text></View>
+              </View>
+              <Text style={styles.sub}>{m.idType}: {m.idValue}</Text>
+              <Text style={styles.sub}>
+                {[m.age ? `${m.age} yrs` : null, m.gender || null, m.bloodGroup || null].filter(Boolean).join(' · ') || 'No details added'}
+              </Text>
+              <Text style={styles.sub}>Allergies: {m.allergies && m.allergies.length > 0 ? m.allergies.join(', ') : 'None'}</Text>
+              <Text style={styles.sub}>Conditions: {m.conditions || 'None'}</Text>
+              {m.prescriptions && m.prescriptions.length > 0 ? (
+                <Text style={styles.sub}>Medicines: {m.prescriptions.map((p) => `${p.drugName} ${p.dosage}`).join(', ')}</Text>
+              ) : null}
+
+              {confirmId === m.id ? (
+                <View style={styles.actions}>
+                  <Text style={styles.confirmText}>Remove {m.name}?</Text>
+                  <TouchableOpacity style={styles.deleteBtn} onPress={() => remove(m.id)}><Text style={styles.deleteText}>Yes, remove</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.editBtn} onPress={() => setConfirmId(null)}><Text style={styles.editText}>Keep</Text></TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.actions}>
+                  <TouchableOpacity style={styles.editBtn} onPress={() => openEdit(m)}><Text style={styles.editText}>Edit</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.deleteBtn} onPress={() => setConfirmId(m.id)}><Text style={styles.deleteText}>Delete</Text></TouchableOpacity>
+                </View>
+              )}
+            </View>
+          ))}
+        </>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { paddingVertical: 8 },
-  label: { fontSize: 13, fontWeight: '700', color: '#5a6a6a', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
-  option: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#e0eaea' },
-  optionActive: { borderColor: TEAL, backgroundColor: '#eef6f6' },
-  optionTitle: { fontSize: 15, fontWeight: '700', color: '#1a3c3d' },
-  optionTitleActive: { color: TEAL },
-  optionSub: { fontSize: 13, color: '#667', marginTop: 2 },
-  button: { backgroundColor: TEAL, borderRadius: 10, padding: 15, alignItems: 'center' },
-  buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  confirmCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 16, borderWidth: 2, borderColor: TEAL },
-  confirmTick: { fontSize: 36, color: '#2e9e5b' },
-  confirmTitle: { fontSize: 18, fontWeight: '700', color: '#1a3c3d', marginVertical: 8 },
-  confirmText: { fontSize: 14, color: '#445', textAlign: 'center', lineHeight: 20 },
+  heading: { ...type.sectionLabel, marginTop: 20, marginBottom: 10 },
+  button: { backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 15, alignItems: 'center', ...shadow },
+  buttonText: { color: colors.white, fontWeight: '700', fontSize: 16 },
+  link: { color: colors.primary, textAlign: 'center', marginTop: 16, fontWeight: '600', fontSize: 13 },
+
+  card: { ...cardStyle, padding: 16, marginBottom: 12 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  avatarText: { fontSize: 16, fontWeight: '800', color: colors.primary },
+  name: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.text, marginRight: 8 },
+  relationTag: { backgroundColor: colors.primarySoft, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  relationText: { fontSize: 11, fontWeight: '700', color: colors.primary },
+  sub: { fontSize: 13, color: colors.textMuted, marginTop: 3 },
+
+  actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 12, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 },
+  confirmText: { fontSize: 13, color: colors.danger, fontWeight: '600', marginRight: 10 },
+  editBtn: { backgroundColor: colors.primarySoft, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9, marginRight: 8 },
+  editText: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+  deleteBtn: { backgroundColor: colors.dangerSoft, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9, marginRight: 8, borderWidth: 1, borderColor: '#FECACA' },
+  deleteText: { color: colors.danger, fontWeight: '700', fontSize: 13 },
+
+  formCard: { ...cardStyle, padding: 20 },
+  formTitle: { fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 16 },
+  field: { marginBottom: 16 },
+  label: { ...type.sectionLabel, fontSize: 11, marginBottom: 6 },
+  input: { backgroundColor: colors.bg, borderRadius: 12, padding: 13, borderWidth: 1, borderColor: colors.border, fontSize: 16, color: colors.text },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipText: { color: colors.primary, fontWeight: '600', fontSize: 13 },
+  chipTextOn: { color: colors.white },
+  error: { color: colors.danger, fontWeight: '600', fontSize: 13, backgroundColor: colors.dangerSoft, borderRadius: 10, padding: 10, marginBottom: 12, overflow: 'hidden' },
+
+  empty: { alignItems: 'center', paddingVertical: 36, paddingHorizontal: 24 },
+  emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.6 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textMuted },
+  emptySub: { ...type.secondary, marginTop: 4, textAlign: 'center' },
 });
