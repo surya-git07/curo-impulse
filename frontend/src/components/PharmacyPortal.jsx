@@ -18,6 +18,28 @@ const lookupMessage = (e) => {
   return errorMessage(e, 'Could not look that up.');
 };
 
+// Find by CareID: GET /pharmacy/patients/{careId}/prescriptions/active
+const careIdLookupMessage = (e) => {
+  const status = e.response?.status;
+  const code = e.response?.data?.error;
+  if (status === 404) return 'No patient found with that CareID. Check it and try again.';
+  if (status === 403) {
+    if (code === 'PHARMACY_NOT_VERIFIED') return 'Your pharmacy has not been verified yet, so you cannot look up prescriptions.';
+    if (code === 'NO_PHARMACY') return 'Your account is not linked to a pharmacy, so you cannot look up prescriptions.';
+    if (code === 'FORBIDDEN_ROLE') return 'Only a pharmacy account can look up prescriptions.';
+    return 'You do not have permission to look up this patient.';
+  }
+  if (status === 429) return errorMessage(e, 'Too many lookups for unknown CareIDs. Please wait a few minutes and try again.');
+  return errorMessage(e, 'Could not look that up. Please try again.');
+};
+
+const FREQUENCY_TEXT = {
+  ONCE_DAILY: 'Once daily',
+  TWICE_DAILY: 'Twice daily',
+  THREE_TIMES_DAILY: 'Three times daily',
+  FOUR_TIMES_DAILY: 'Four times daily',
+};
+
 const dispenseMessage = (e) => {
   const status = e.response?.status;
   const code = e.response?.data?.error;
@@ -55,15 +77,15 @@ function PharmacyPortal() {
     .map((g) => ({ ...g, drugs: (g.drugs || []).filter((d) => d.status === 'ACTIVE') }))
     .filter((g) => g.drugs.length > 0);
 
-  const run = async (kind, fetcher) => {
+  // toGroups turns the response into [{ careId, issuedAt?, drugs: [...] }]; onError picks the message
+  const run = async (kind, fetcher, toGroups, onError = lookupMessage) => {
     setErr(''); setMsg(''); setGroups(null); setBusy(kind);
     try {
       const res = await fetcher();
-      const list = Array.isArray(res.data) ? res.data : [res.data];
-      setGroups(activeOnly(list));
+      setGroups(toGroups(res.data));
       setLastLookup(kind);
     } catch (e) {
-      setErr(lookupMessage(e));
+      setErr(onError(e));
     } finally {
       setBusy('');
     }
@@ -73,14 +95,18 @@ function PharmacyPortal() {
     e?.preventDefault();
     const value = code.trim();
     if (!value) { setErr('Enter the prescription code.'); return; }
-    run('code', () => axios.get(`${API}/prescription/by-qr/${encodeURIComponent(value)}`, auth));
+    run('code', () => axios.get(`${API}/prescription/by-qr/${encodeURIComponent(value)}`, auth),
+      (data) => activeOnly(Array.isArray(data) ? data : [data]));
   };
 
   const byCareId = (e) => {
     e?.preventDefault();
     const value = careId.trim().toUpperCase();
     if (!CARE_ID_RE.test(value)) { setErr('A CareID looks like CID-7K3MQ9.'); return; }
-    run('careId', () => axios.get(`${API}/prescription/for-patient/${encodeURIComponent(value)}/active`, auth));
+    run('careId', () => axios.get(`${API}/pharmacy/patients/${encodeURIComponent(value)}/prescriptions/active`, auth),
+      // { careId, prescriptions: [{ id, drug, dose, frequency, duration, endDate, doctorName, dispenseStatus }] }
+      (data) => ((data?.prescriptions || []).length ? [{ careId: data.careId || value, drugs: data.prescriptions }] : []),
+      careIdLookupMessage);
   };
 
   const dispense = async (rx) => {
@@ -208,7 +234,10 @@ function PharmacyPortal() {
                     <div key={d.id} className="prow">
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>{d.drug}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{[d.dose, d.duration].filter(Boolean).join(' · ')}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {[d.dose, FREQUENCY_TEXT[d.frequency] || d.frequency, d.duration, d.endDate ? `until ${d.endDate}` : null, d.doctorName]
+                            .filter(Boolean).join(' · ')}
+                        </div>
                       </div>
                       <StatusBadge status="ACTIVE" />
                       <button
