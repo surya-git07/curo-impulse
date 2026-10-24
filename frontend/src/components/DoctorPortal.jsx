@@ -65,7 +65,6 @@ const [rxDrugs, setRxDrugs] = useState([{ drug: '', strength: '', frequency: '',
   const [rxWarnings, setRxWarnings] = useState([]);
   const [issuedQr, setIssuedQr] = useState(null);
   const [refreshingQueue, setRefreshingQueue] = useState(false);
-  const [refreshingIssued, setRefreshingIssued] = useState(false);
   const [now, setNow] = useState(new Date());
 
   const [myLeave, setMyLeave] = useState(null);
@@ -161,12 +160,6 @@ const fetchProfile = async () => {
     setTimeout(() => setRefreshingQueue(false), 400);
   };
 
-  const refreshIssued = async () => {
-    setRefreshingIssued(true);
-    await fetchIssued();
-    setTimeout(() => setRefreshingIssued(false), 400);
-  };
-
   const noGrant = (e) => e.response?.status === 403 && e.response?.data?.error === 'NO_ACTIVE_GRANT';
   const NO_GRANT_TEXT = 'No active access to this patient (NO_ACTIVE_GRANT). Ask the patient for a share code and enter it on the Queue tab, or request access first.';
 
@@ -225,30 +218,6 @@ const fetchProfile = async () => {
     } finally {
       setAccessBusy(false);
     }
-  };
-
-  const removeIssued = async (id) => {
-    if (!window.confirm('Remove this prescription record?')) return;
-    try {
-      await axios.delete(`${API}/prescription/${id}`, auth);
-      fetchIssued();
-    } catch (e) { console.error(e); }
-  };
-
-  const recallGroup = async (groupId) => {
-    if (!window.confirm('Recall this prescription? This will invalidate it immediately.')) return;
-    try {
-      await axios.post(`${API}/prescription/group/${groupId}/recall`, {}, auth);
-      fetchIssued();
-    } catch (e) {
-      alert(errorMessage(e, 'Failed to recall.'));
-    }
-  };
-
-  const minutesLeftToRecall = (issuedAt) => {
-    if (!issuedAt) return 0;
-    const elapsed = (new Date() - new Date(issuedAt)) / 60000;
-    return Math.max(0, Math.ceil(30 - elapsed));
   };
 
   const issueRx = async (e) => {
@@ -383,14 +352,13 @@ const addDrugRow = () => {
     { key: 'queue', label: 'Queue' },
     { key: 'patient', label: 'Patient' },
     { key: 'rx', label: 'Write Rx' },
-    { key: 'issued', label: 'Issued' },
     { key: 'extend', label: 'Extend' },
     { key: 'profile', label: 'Profile' },
   ];
 
 const goTab = (t) => {
   setTab(t);
-  if (t === 'issued' || t === 'extend') fetchIssued();
+  if (t === 'extend') fetchIssued();
   if (t === 'profile') { fetchMyLeave(); fetchOtherDoctors(); fetchProfile(); }
 };
 
@@ -812,7 +780,7 @@ const goTab = (t) => {
                   {issuedQr && (
                     <div className="alert-box alert-blue" style={{ textAlign: 'center' }}>
                       <RxQrCode code={issuedQr.code} />
-                      {issuedQr.code && <div style={{ fontSize: 11, marginTop: 6 }}>The patient shows this at the pharmacy. It is also on the Issued tab.</div>}
+                      {issuedQr.code && <div style={{ fontSize: 11, marginTop: 6 }}>The patient shows this at the pharmacy.</div>}
                     </div>
                   )}
 
@@ -827,48 +795,6 @@ const goTab = (t) => {
                 </form>
               </div>
             )
-          )}
-
-          {tab === 'issued' && (
-            <div className="mt-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div className="mt-card-title" style={{ marginBottom: 0 }}>Recently issued</div>
-                <button className="mt-btn mt-btn-outline" style={{ fontSize: 11, padding: '4px 10px' }} onClick={refreshIssued} disabled={refreshingIssued}>
-                  {refreshingIssued ? 'Refreshing…' : '↻ Refresh'}
-                </button>
-              </div>
-              {issued.length === 0 ? (
-                <EmptyState icon="📄" title="Nothing issued yet" text="Prescriptions you issue appear here with their QR code." />
-              ) : issued.map(g => {
-                const minsLeft = minutesLeftToRecall(g.issuedAt);
-                return (
-                  <div key={g.id} className="prow" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600 }}>Group #{g.id} — {g.careId}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                          {g.issuedAt ? new Date(g.issuedAt).toLocaleString() : ''}
-                          {g.extendedDays > 0 ? ` · extended +${g.extendedDays}d` : ''}
-                        </div>
-                      </div>
-                      <StatusBadge status={g.status} />
-                      <button className="mt-btn mt-btn-outline" style={{ padding: '4px 10px', fontSize: 11, marginLeft: 8 }} onClick={() => removeIssued(g.id)}>✕</button>
-                    </div>
-                    {g.qrCode && g.status !== 'RECALLED' && (
-                      <div style={{ margin: '8px 0' }}><RxQrCode code={g.qrCode} size={140} /></div>
-                    )}
-                    {g.status === 'ISSUED' && minsLeft > 0 && (
-                      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: 11, color: 'var(--c-red)' }}>⏱ Recall window — {minsLeft} min remaining</span>
-                        <button className="mt-btn mt-btn-red" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => recallGroup(g.id)}>
-                          Recall prescription
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
           )}
 
           {tab === 'extend' && (
