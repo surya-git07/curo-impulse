@@ -126,4 +126,4 @@ The login, signup and prescription-view foundation is reused from an earlier pro
 
 ## Future scope
 
-ABHA/ABDM integration, NMC/HPR doctor verification, Bedrock-backed interaction checks, Amazon Timestream, HealthLake, OpenSearch and Comprehend Medical.
+Governemnt integration, doctor lisence verification, Bedrock-backed interaction checks, Amazon Timestream, HealthLake, OpenSearch and Comprehend Medical.
