@@ -2,7 +2,10 @@ package com.curo.curo_backend.service;
 
 import com.curo.curo_backend.dto.ActorView;
 import com.curo.curo_backend.dto.DiscontinueRequest;
+import com.curo.curo_backend.dto.DoctorActivePrescriptionsResponse;
+import com.curo.curo_backend.dto.DoctorPrescriptionItem;
 import com.curo.curo_backend.dto.DrugItem;
+import com.curo.curo_backend.dto.ExtendRequest;
 import com.curo.curo_backend.dto.HistoryResponse;
 import com.curo.curo_backend.dto.InteractionResult;
 import com.curo.curo_backend.dto.IssueRequest;
@@ -13,6 +16,7 @@ import com.curo.curo_backend.dto.VersionView;
 import com.curo.curo_backend.dto.WarningView;
 import com.curo.curo_backend.model.AppUser;
 import com.curo.curo_backend.model.AuditAction;
+import com.curo.curo_backend.model.AuditOutcome;
 import com.curo.curo_backend.model.ChangeType;
 import com.curo.curo_backend.model.DrugMaster;
 import com.curo.curo_backend.model.Frequency;
@@ -34,6 +38,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -66,6 +72,9 @@ public class PrescriptionService {
 
     @Autowired
     private AccessGuard accessGuard;
+
+    @Autowired
+    private AuditService auditService;
 
     @Autowired
     private PrescriptionRepository prescriptionRepository;
@@ -138,7 +147,7 @@ public class PrescriptionService {
         // Saved whatever the warnings say. The check advises; it never blocks.
         List<Prescription> saved = prescriptionRepository.saveAll(created);
         saved.forEach(p -> scheduleDoses(p, patient, false));
-        return new IssueResponse(saved.stream().map(p -> view(p, false)).toList(), warnings);
+        return new IssueResponse(saved.stream().map(p -> toView(p, false)).toList(), warnings);
     }
 
     // ---- modify
@@ -194,7 +203,101 @@ public class PrescriptionService {
         if (!Objects.equals(oldTimes, saved.getSchedule()) || !Objects.equals(oldDays, saved.getDurationDays())) {
             scheduleDoses(saved, patient, true);
         }
-        return view(saved, true);
+        return toView(saved, true);
+    }
+
+    // ---- extend
+
+    /**
+     * Moves the last day of a course later, by extraDays or to newEndDate. The course length (durationDays) is recomputed so
+     * every other part of the system (doses, medication profile, dispensing) sees the new end date. The change is a new
+     * version with the old and new end date, and is written to the patient access log.
+     */
+    public PrescriptionView extend(String id, ExtendRequest request) {
+        AppUser doctor = requireDoctor();
+        Prescription p = find(id);
+        AccessGuard.Granted granted = accessGuard.require(p.getCareId(), GrantScope.PRESCRIPTIONS, AuditAction.WRITE, "PRESCRIPTION", id);
+        if (p.getStatus() == PrescriptionStatus.DISCONTINUED) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRESCRIPTION_DISCONTINUED", "A discontinued prescription cannot be extended.");
+        }
+        if (p.getStatus() == PrescriptionStatus.DISPENSED) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRESCRIPTION_DISPENSED",
+                    "This prescription has already been dispensed in full, so it cannot be extended. Issue a new prescription instead.");
+        }
+        requireActive(p);
+
+        ZoneId zone = ZoneId.of(timeZone);
+        Instant now = clock.instant();
+        LocalDate today = now.atZone(zone).toLocalDate();
+        LocalDate start = Courses.startDate(p, zone);
+        Optional<LocalDate> currentEnd = Courses.endDate(p, zone);
+
+        boolean hasDays = request.getExtraDays() != null;
+        boolean hasDate = request.getNewEndDate() != null && !request.getNewEndDate().isBlank();
+        if (hasDays == hasDate) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_EXTENSION", "Send either extraDays or newEndDate, not both.");
+        }
+        LocalDate newEnd;
+        if (hasDays) {
+            int extra = request.getExtraDays();
+            if (extra < 1 || extra > 365) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_EXTENSION", "extraDays must be between 1 and 365.");
+            }
+            if (currentEnd.isEmpty()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "END_DATE_REQUIRED",
+                        "This prescription has no end date yet, so send newEndDate instead of extraDays.");
+            }
+            newEnd = currentEnd.get().plusDays(extra);
+        } else {
+            try {
+                newEnd = LocalDate.parse(request.getNewEndDate().trim());
+            } catch (DateTimeParseException e) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_END_DATE", "newEndDate must be a date like 2026-11-05.");
+            }
+        }
+        if (!newEnd.isAfter(today)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "END_DATE_NOT_LATER", "The new end date must be later than today.");
+        }
+        if (currentEnd.isPresent() && !newEnd.isAfter(currentEnd.get())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "END_DATE_NOT_LATER",
+                    "The new end date must be later than the current end date (" + currentEnd.get() + ").");
+        }
+        long days = ChronoUnit.DAYS.between(start, newEnd) + 1;
+        if (days > 365) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "COURSE_TOO_LONG", "A course cannot run for more than 365 days in total.");
+        }
+        String reason = request.getReason() == null || request.getReason().isBlank() ? null : request.getReason().trim();
+
+        List<String> times = p.getSchedule();
+        p.setDurationDays((int) days);
+        p.setDuration(days + " days");
+        appendVersion(p, ChangeType.EXTENDED, reason, doctor, now, currentEnd.orElse(null), newEnd);
+        Prescription saved = prescriptionRepository.save(p);
+        if (times != null && !times.isEmpty()) {
+            scheduleDoses(saved, granted.patient(), true); // the doses still ahead now run to the new end date
+        }
+        auditService.recordQuietly(granted.patient(), doctor, AuditAction.PRESCRIPTION_EXTEND, "PRESCRIPTION", id,
+                granted.grant().getId(), AuditOutcome.ALLOWED,
+                "end date " + currentEnd.map(LocalDate::toString).orElse("none") + " to " + newEnd);
+        return view(saved, true, zone, today);
+    }
+
+    /** The patient's current prescriptions for the Extend tab. Needs an active PRESCRIPTIONS grant; the read is logged. */
+    public DoctorActivePrescriptionsResponse activeForDoctor(String careId) {
+        requireDoctor();
+        String id = careId == null ? "" : careId.trim().toUpperCase(Locale.ROOT);
+        AccessGuard.Granted granted = accessGuard.require(id, GrantScope.PRESCRIPTIONS, AuditAction.READ, "PRESCRIPTION", id);
+        ZoneId zone = ZoneId.of(timeZone);
+        LocalDate today = clock.instant().atZone(zone).toLocalDate();
+        List<DoctorPrescriptionItem> items = Courses.live(prescriptionRepository, granted.patient().getCareId()).stream()
+                .filter(p -> Courses.isCurrent(p, today, zone))
+                .sorted(java.util.Comparator.comparing(Prescription::getIssuedAt).reversed().thenComparing(Prescription::getDrug))
+                .map(p -> {
+                    LocalDate end = Courses.endDate(p, zone).orElse(null);
+                    return new DoctorPrescriptionItem(p.getId(), p.getDrug(), p.getDose(), p.getFrequency(), p.getIssuedAt(), end,
+                            daysLeft(end, today), p.getStatus(), p.getStatus() == PrescriptionStatus.ACTIVE);
+                }).toList();
+        return new DoctorActivePrescriptionsResponse(granted.patient().getCareId(), items);
     }
 
     // ---- discontinue
@@ -217,7 +320,7 @@ public class PrescriptionService {
         } catch (RuntimeException e) {
             log.warn("future doses of {} could not be cancelled ({})", saved.getId(), e.getClass().getSimpleName());
         }
-        return view(saved, true);
+        return toView(saved, true);
     }
 
     // ---- history
@@ -388,7 +491,14 @@ public class PrescriptionService {
 
     // The top-level fields must already hold the new values; this records them as the next version
     private void appendVersion(Prescription p, ChangeType type, String reason, AppUser by, Instant at) {
+        appendVersion(p, type, reason, by, at, null, null);
+    }
+
+    private void appendVersion(Prescription p, ChangeType type, String reason, AppUser by, Instant at,
+                               LocalDate previousEndDate, LocalDate endDate) {
         PrescriptionVersion v = new PrescriptionVersion();
+        v.setPreviousEndDate(previousEndDate);
+        v.setEndDate(endDate);
         v.setVersion(p.getCurrentVersion() + 1);
         v.setChangeType(type);
         v.setDose(p.getDose());
@@ -405,17 +515,29 @@ public class PrescriptionService {
         p.setCurrentVersion(v.getVersion());
     }
 
-    static PrescriptionView view(Prescription p, boolean withVersions) {
+    private PrescriptionView toView(Prescription p, boolean withVersions) {
+        ZoneId zone = ZoneId.of(timeZone);
+        return view(p, withVersions, zone, clock.instant().atZone(zone).toLocalDate());
+    }
+
+    /** endDate comes from the issue date and the duration; daysLeft counts from today and is never negative. */
+    static PrescriptionView view(Prescription p, boolean withVersions, ZoneId zone, LocalDate today) {
+        LocalDate endDate = p.getIssuedAt() == null ? null : Courses.endDate(p, zone).orElse(null);
         return new PrescriptionView(p.getId(), p.getCareId(), p.getDoctorId(), p.getDrug(), p.getDose(), p.getDuration(),
                 p.getDurationDays(), p.getFrequency(), p.getSchedule(), p.getStatus(), p.getIssuedAt(), p.getDiscontinuedAt(),
-                p.getCurrentVersion(), withVersions ? versions(p) : null);
+                p.getCurrentVersion(), withVersions ? versions(p) : null, endDate, daysLeft(endDate, today));
+    }
+
+    private static Integer daysLeft(LocalDate endDate, LocalDate today) {
+        return endDate == null ? null : (int) Math.max(0, ChronoUnit.DAYS.between(today, endDate));
     }
 
     static List<VersionView> versions(Prescription p) {
         return p.getVersions().stream()
                 .map(v -> new VersionView(v.getVersion(), v.getChangeType(), v.getDose(), v.getDuration(), v.getDurationDays(),
                         v.getFrequency(), v.getSchedule(), v.getReason(),
-                        new ActorView(v.getChangedByUserId(), v.getChangedByRole(), v.getChangedByName(), null), v.getChangedAt()))
+                        new ActorView(v.getChangedByUserId(), v.getChangedByRole(), v.getChangedByName(), null), v.getChangedAt(),
+                        v.getPreviousEndDate(), v.getEndDate()))
                 .toList();
     }
 }

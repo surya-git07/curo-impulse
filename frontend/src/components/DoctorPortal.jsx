@@ -5,7 +5,7 @@ import { decodeToken } from '../utils/jwt';
 import { API } from '../config';
 import { errorMessage, stripDr } from '../api';
 import RxQrCode from './RxQrCode';
-import { EmptyState, StatusBadge, SeverityCard } from './ui';
+import { EmptyState, StatusBadge, SeverityCard, Loading } from './ui';
 
 const FREQUENCY_CODE = {
   'Once daily': 'ONCE_DAILY',
@@ -36,6 +36,28 @@ const buildHistoryStats = (history) => {
   return { coursesLast30, antibiotics90Days, daysSinceLast, lifetimeTotal: history.length };
 };
 
+const pad2 = (n) => String(n).padStart(2, '0');
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+// "2026-11-05" -> a local date string, without a timezone shift
+const fmtDay = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+};
+const addDaysIso = (iso, n) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  const d = new Date(+m[1], +m[2] - 1, +m[3] + n);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+const daysLeftText = (n) => {
+  if (n === null || n === undefined) return 'No end date';
+  if (n === 0) return 'Last day';
+  return n === 1 ? '1 day left' : `${n} days left`;
+};
+const FREQ_LABEL = { ONCE_DAILY: 'Once daily', TWICE_DAILY: 'Twice daily', THREE_TIMES_DAILY: 'Three times daily', FOUR_TIMES_DAILY: 'Four times daily' };
+
 function DoctorPortal() {
   const [tab, setTab] = useState('queue');
   const [queue, setQueue] = useState([]);
@@ -52,10 +74,15 @@ function DoctorPortal() {
   const [accessErr, setAccessErr] = useState('');
   const [accessBusy, setAccessBusy] = useState(false);
   const [drugs, setDrugs] = useState([]);
-  const [issued, setIssued] = useState([]);
-  const [extendTarget, setExtendTarget] = useState(null);
-  const [extendNote, setExtendNote] = useState('');
+  const [extendList, setExtendList] = useState(null); // null until loaded for the open patient
+  const [extendLoading, setExtendLoading] = useState(false);
+  const [extendLoadErr, setExtendLoadErr] = useState('');
   const [extendMsg, setExtendMsg] = useState('');
+  const [extendOpen, setExtendOpen] = useState(null); // prescription id whose control is open
+  const [extendDays, setExtendDays] = useState(7);
+  const [extendDate, setExtendDate] = useState('');
+  const [extendFormErr, setExtendFormErr] = useState('');
+  const [extendBusy, setExtendBusy] = useState(false);
   const [profile, setProfile] = useState(null);
   const [patientView, setPatientView] = useState('main'); // 'main' | 'activeDetail' | 'pastDetail'
 
@@ -117,13 +144,6 @@ const [rxDrugs, setRxDrugs] = useState([{ drug: '', strength: '', frequency: '',
     try {
       const res = await axios.get(`${API}/drugs/list`, auth);
       setDrugs(res.data);
-    } catch (e) { console.error(e); }
-  };
-
-  const fetchIssued = async () => {
-    try {
-      const res = await axios.get(`${API}/prescription/recent`, auth);
-      setIssued(res.data);
     } catch (e) { console.error(e); }
   };
 
@@ -246,26 +266,81 @@ const fetchProfile = async () => {
       setIssuedQr({ code: res.data.qrCode || null });
       setRxDrugs([{ drug: '', strength: '', frequency: '', duration: '', risk: null }]);
       fetchQueue();
-      fetchIssued();
+      setExtendList(null);
     } catch (err) {
       if (noGrant(err)) setRxErr(NO_GRANT_TEXT);
       else setRxErr(errorMessage(err, 'Failed to issue prescription.'));
     }
   };
 
-  const extendGroup = async (groupId, days) => {
-    setExtendMsg('');
+  // Extend tab: the open patient's current prescriptions. Returns the list so callers can read the new end date.
+  const loadExtend = async () => {
+    if (!selectedCareId) return null;
+    setExtendLoading(true);
+    setExtendLoadErr('');
     try {
-      await axios.post(`${API}/prescription/group/${groupId}/extend`, {
-        extendByDays: days,
-        note: extendNote,
-      }, auth);
-      setExtendMsg(`Extended by ${days} days.`);
-      setExtendNote('');
-      setExtendTarget(null);
-      fetchIssued();
+      const res = await axios.get(`${API}/doctor/patients/${encodeURIComponent(selectedCareId)}/prescriptions/active`, auth);
+      const list = res.data?.prescriptions || [];
+      setExtendList(list);
+      return list;
     } catch (e) {
-      alert(errorMessage(e, 'Failed to extend.'));
+      setExtendList([]);
+      setExtendLoadErr(noGrant(e) ? NO_GRANT_TEXT : errorMessage(e, 'Could not load the prescriptions. Please try again.'));
+      return null;
+    } finally {
+      setExtendLoading(false);
+    }
+  };
+
+  const openExtend = (rx) => {
+    setExtendMsg('');
+    setExtendFormErr('');
+    setExtendOpen(rx.id);
+    setExtendDays(7);
+    setExtendDate('');
+  };
+
+  const EXTEND_MESSAGES = {
+    INVALID_END_DATE: 'That is not a valid date. Pick the new end date from the calendar.',
+    END_DATE_NOT_LATER: null, // the API message names the current end date
+    COURSE_TOO_LONG: 'A course cannot run for more than 365 days in total. Choose an earlier date.',
+    END_DATE_REQUIRED: 'This prescription has no end date yet. Pick a new end date instead of a number of days.',
+    PRESCRIPTION_DISPENSED: 'This prescription was already dispensed in full, so it cannot be extended. Issue a new prescription instead.',
+    PRESCRIPTION_DISCONTINUED: 'This prescription was discontinued, so it cannot be extended.',
+  };
+
+  const confirmExtend = async (rx, mode) => {
+    setExtendFormErr('');
+    let body;
+    if (mode === 'date') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(extendDate)) { setExtendFormErr('Pick the new end date.'); return; }
+      const floor = rx.endDate && rx.endDate > todayIso() ? rx.endDate : todayIso();
+      if (extendDate <= floor) {
+        setExtendFormErr(rx.endDate && rx.endDate >= todayIso()
+          ? `The new end date must be later than the current end date (${fmtDay(rx.endDate)}).`
+          : 'The new end date must be later than today.');
+        return;
+      }
+      body = { newEndDate: extendDate };
+    } else {
+      body = { extraDays: extendDays };
+    }
+    setExtendBusy(true);
+    try {
+      await axios.patch(`${API}/prescriptions/${encodeURIComponent(rx.id)}/extend`, body, auth);
+      setExtendOpen(null);
+      const list = await loadExtend();
+      const updated = (list || []).find((x) => x.id === rx.id);
+      setExtendMsg(updated?.endDate
+        ? `${rx.drug} now ends on ${fmtDay(updated.endDate)}.`
+        : `${rx.drug} was extended.`);
+    } catch (e) {
+      const code = e.response?.data?.error;
+      if (noGrant(e)) setExtendFormErr(NO_GRANT_TEXT);
+      else if (EXTEND_MESSAGES[code]) setExtendFormErr(EXTEND_MESSAGES[code]);
+      else setExtendFormErr(errorMessage(e, 'Could not extend this prescription. Please try again.'));
+    } finally {
+      setExtendBusy(false);
     }
   };
 
@@ -358,7 +433,7 @@ const addDrugRow = () => {
 
 const goTab = (t) => {
   setTab(t);
-  if (t === 'extend') fetchIssued();
+  if (t === 'extend') { setExtendMsg(''); setExtendOpen(null); loadExtend(); }
   if (t === 'profile') { fetchMyLeave(); fetchOtherDoctors(); fetchProfile(); }
 };
 
@@ -800,68 +875,106 @@ const goTab = (t) => {
           {tab === 'extend' && (
             <div className="mt-card">
               <div className="mt-card-title">Extend prescription</div>
-              <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                Patient returns, continue the same medicine — no new prescription needed.
-              </p>
+              {!selectedCareId ? (
+                <EmptyState icon="📄" title="Open a patient with their share code first" />
+              ) : (
+                <>
+                  <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                    Current prescriptions for {selectedCareId}. Continue the same medicine without writing a new prescription.
+                  </p>
+                  {extendMsg && <div className="alert-box alert-green" role="status">{extendMsg}</div>}
+                  {extendLoadErr && <div className="alert-box alert-orange" role="alert">{extendLoadErr}</div>}
+                  {extendLoading && !extendList ? (
+                    <Loading text="Loading prescriptions…" />
+                  ) : extendList && extendList.length === 0 && !extendLoadErr ? (
+                    <EmptyState icon="📄" title="No active prescriptions to extend" />
+                  ) : (extendList || []).map((rx) => {
+                    const open = extendOpen === rx.id;
+                    const hasEnd = !!rx.endDate;
+                    const mode = hasEnd ? undefined : 'date';
+                    const minDate = addDaysIso(rx.endDate && rx.endDate > todayIso() ? rx.endDate : todayIso(), 1);
+                    return (
+                      <div key={rx.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                          <div>
+                            <strong style={{ fontSize: 13 }}>{rx.drug}</strong>
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                              {[rx.strength, FREQ_LABEL[rx.frequency] || rx.frequency].filter(Boolean).join(' · ')}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                              Issued {rx.issuedAt ? new Date(rx.issuedAt).toLocaleDateString() : '—'}
+                              {' · '}Ends {hasEnd ? fmtDay(rx.endDate) : '—'}
+                              {' · '}<strong>{daysLeftText(rx.daysLeft)}</strong>
+                            </div>
+                          </div>
+                          {rx.canExtend ? (
+                            !open && (
+                              <button type="button" className="mt-btn mt-btn-purple" onClick={() => openExtend(rx)}>Extend</button>
+                            )
+                          ) : (
+                            <StatusBadge status={rx.status} />
+                          )}
+                        </div>
+                        {!rx.canExtend && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                            Already dispensed in full, so it cannot be extended. Issue a new prescription instead.
+                          </div>
+                        )}
 
-              {extendMsg && <div className="alert-box alert-green">{extendMsg}</div>}
-
-              {issued.filter(g => g.status === 'ISSUED' || g.status === 'DISPENSED').length === 0 ? (
-                <EmptyState icon="📄" title="No active prescriptions to extend" />
-              ) : issued.filter(g => g.status === 'ISSUED' || g.status === 'DISPENSED').map(g => (
-<div key={g.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10 }}>
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-    <div>
-      <strong style={{ fontSize: 12 }}>Group #{g.id} — {g.careId}</strong>
-      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-        Issued {g.issuedAt ? new Date(g.issuedAt).toLocaleDateString() : ''}
-        {g.extendedDays > 0 ? ` · already extended +${g.extendedDays}d` : ''}
-      </div>
-    </div>
-    <StatusBadge status={g.status} />
-  </div>
-
-  {g.drugs && g.drugs.length > 0 && (
-    <div style={{
-      background: 'var(--surface-1)',
-      borderRadius: 8,
-      padding: '8px 10px',
-      marginBottom: 8,
-    }}>
-      {g.drugs.map(drug => (
-        <div key={drug.id} style={{ fontSize: 11, marginBottom: 4 }}>
-          <strong>{drug.drug}</strong> — {drug.dose} · {drug.duration}
-        </div>
-      ))}
-    </div>
-  )}
-
-                  {extendTarget === g.id ? (
-                    <div style={{ marginTop: 10 }}>
-                      <label className="mt-label">Doctor note</label>
-                      <input
-                        className="mt-input"
-                        style={{ marginBottom: 8 }}
-                        placeholder="e.g. Patient improving, continue course. No dosage change."
-                        value={extendNote}
-                        onChange={(e) => setExtendNote(e.target.value)}
-                      />
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button className="mt-btn mt-btn-outline" style={{ flex: 1 }} onClick={() => extendGroup(g.id, 3)}>+3 days</button>
-                        <button className="mt-btn mt-btn-outline" style={{ flex: 1 }} onClick={() => extendGroup(g.id, 5)}>+5 days</button>
-                        <button className="mt-btn mt-btn-outline" style={{ flex: 1 }} onClick={() => extendGroup(g.id, 7)}>+7 days</button>
+                        {open && (
+                          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                            {hasEnd && (
+                              <>
+                                <span className="mt-label">Extend by</span>
+                                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                                  {[7, 14, 30].map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      className={`mt-btn ${extendDays === n && !extendDate ? 'mt-btn-purple' : 'mt-btn-outline'}`}
+                                      style={{ flex: 1 }}
+                                      onClick={() => { setExtendDays(n); setExtendDate(''); setExtendFormErr(''); }}
+                                    >
+                                      {n} days
+                                    </button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                            <label className="mt-label" htmlFor={`extend-date-${rx.id}`}>
+                              {hasEnd ? 'Or pick a new end date' : 'New end date'}
+                            </label>
+                            <input
+                              id={`extend-date-${rx.id}`}
+                              className="mt-input"
+                              type="date"
+                              min={minDate}
+                              value={extendDate}
+                              onChange={(e) => { setExtendDate(e.target.value); setExtendFormErr(''); }}
+                              style={{ marginBottom: 8 }}
+                            />
+                            {extendFormErr && <div className="alert-box alert-red" role="alert">{extendFormErr}</div>}
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button
+                                type="button"
+                                className="mt-btn mt-btn-purple"
+                                style={{ flex: 1 }}
+                                disabled={extendBusy}
+                                onClick={() => confirmExtend(rx, mode || (extendDate ? 'date' : 'days'))}
+                              >
+                                {extendBusy ? 'Saving…' : 'Confirm'}
+                              </button>
+                              <button type="button" className="mt-btn mt-btn-outline" disabled={extendBusy} onClick={() => setExtendOpen(null)}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <button className="mt-btn mt-btn-outline" style={{ width: '100%', marginTop: 8 }} onClick={() => setExtendTarget(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button className="mt-btn mt-btn-purple" style={{ width: '100%', marginTop: 8 }} onClick={() => setExtendTarget(g.id)}>
-                      Extend this prescription
-                    </button>
-                  )}
-                </div>
-              ))}
+                    );
+                  })}
+                </>
+              )}
             </div>
           )}
 

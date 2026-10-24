@@ -143,6 +143,7 @@ public class PrescriptionHarness {
         ReflectionTestUtils.setField(prescriptionService, "timeZone", "Asia/Kolkata");
         ReflectionTestUtils.setField(prescriptionService, "currentUser", currentUser);
         ReflectionTestUtils.setField(prescriptionService, "accessGuard", guard);
+        ReflectionTestUtils.setField(prescriptionService, "auditService", auditService);
         ReflectionTestUtils.setField(prescriptionService, "prescriptionRepository", prescriptionRepository);
         ReflectionTestUtils.setField(prescriptionService, "interactionChecker", checker);
         ReflectionTestUtils.setField(prescriptionService, "drugCatalog", catalog);

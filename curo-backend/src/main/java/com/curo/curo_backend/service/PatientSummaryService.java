@@ -50,9 +50,11 @@ public class PatientSummaryService {
 
         List<com.curo.curo_backend.dto.MedicationView> medications = scope.contains(GrantScope.MEDICATIONS)
                 ? medicationService.currentMedications(patient.getCareId()) : null;
+        ZoneId zone = ZoneId.of(timeZone);
+        LocalDate today = clock.instant().atZone(zone).toLocalDate();
         List<PrescriptionView> prescriptions = scope.contains(GrantScope.PRESCRIPTIONS)
                 ? prescriptionRepository.findByCareIdOrderByIssuedAtDesc(patient.getCareId()).stream()
-                        .map(p -> PrescriptionService.view(p, true)).toList()
+                        .map(p -> PrescriptionService.view(p, true, zone, today)).toList()
                 : null;
 
         return new PatientSummaryView(patient.getCareId(), patient.getName(), age(patient), patient.getGender(), patient.getBloodGroup(),

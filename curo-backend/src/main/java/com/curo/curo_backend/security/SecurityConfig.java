@@ -86,6 +86,8 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/reception/check-in").hasRole("RECEPTION")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/reception/doctors").hasRole("RECEPTION")
                         .requestMatchers("/doctor/queue", "/doctor/queue/**").hasRole("DOCTOR")
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/doctor/patients/*/prescriptions/active").hasRole("DOCTOR")
+                        .requestMatchers(org.springframework.http.HttpMethod.PATCH, "/prescriptions/*/extend").hasRole("DOCTOR")
                         .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/reception/visit/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/reception/queue/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")
                         .requestMatchers("/reception/**").hasAnyRole("RECEPTION", "ADMIN")
