@@ -12,6 +12,8 @@ public class DispenseOrderRequest {
     private String pharmacyId;
     // optional: the CareID being served. If sent, it must be the prescription's patient.
     private String careId;
+    // optional: the caregiver who collects the medicine, by CareID. If sent, it must be an existing CAREGIVER account.
+    private String collectedByCareId;
     private String drug;
     private Integer quantity;
 }

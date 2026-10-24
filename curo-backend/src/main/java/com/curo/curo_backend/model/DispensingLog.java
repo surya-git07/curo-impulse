@@ -37,5 +37,8 @@ public class DispensingLog {
 
     private String dispensedByUserId;
 
+    // CareID of the caregiver who collected it, when it was not the patient
+    private String collectedByCareId;
+
     private Instant at;
 }

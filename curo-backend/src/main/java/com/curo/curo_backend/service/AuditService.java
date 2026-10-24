@@ -49,11 +49,28 @@ public class AuditService {
         auditLogRepository.save(build(patient, actor, action, resource, resourceId, grantId, outcome));
     }
 
+    /** Same as record, with a short note on what was touched (for a dispense, the drug name). */
+    public void record(AppUser patient, AppUser actor, AuditAction action, String resource, String resourceId,
+                       String grantId, AuditOutcome outcome, String detail) {
+        AuditLog entry = build(patient, actor, action, resource, resourceId, grantId, outcome);
+        entry.setDetail(detail);
+        auditLogRepository.save(entry);
+    }
+
     /** Same, but a failure is only logged (class name only). For denials and grant bookkeeping, which must not change the response. */
     public void recordQuietly(AppUser patient, AppUser actor, AuditAction action, String resource, String resourceId,
                               String grantId, AuditOutcome outcome) {
         try {
             record(patient, actor, action, resource, resourceId, grantId, outcome);
+        } catch (RuntimeException e) {
+            log.warn("audit entry {} could not be written ({})", action, e.getClass().getSimpleName());
+        }
+    }
+
+    public void recordQuietly(AppUser patient, AppUser actor, AuditAction action, String resource, String resourceId,
+                              String grantId, AuditOutcome outcome, String detail) {
+        try {
+            record(patient, actor, action, resource, resourceId, grantId, outcome, detail);
         } catch (RuntimeException e) {
             log.warn("audit entry {} could not be written ({})", action, e.getClass().getSimpleName());
         }
@@ -98,6 +115,6 @@ public class AuditService {
     private static AuditEntryView toView(AuditLog e) {
         return new AuditEntryView(e.getId(), e.getAt(),
                 new ActorView(e.getActorUserId(), e.getActorRole(), e.getActorName(), e.getActorFacilityName()),
-                e.getAction(), e.getResource(), e.getResourceId(), e.getGrantId(), e.getOutcome());
+                e.getAction(), e.getResource(), e.getResourceId(), e.getGrantId(), e.getOutcome(), e.getDetail());
     }
 }

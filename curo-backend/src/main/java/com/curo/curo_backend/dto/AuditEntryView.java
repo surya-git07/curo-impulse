@@ -9,6 +9,7 @@ import java.time.Instant;
 
 @Data
 @AllArgsConstructor
+@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
 public class AuditEntryView {
     private String id;
     private Instant at;
@@ -18,4 +19,11 @@ public class AuditEntryView {
     private String resourceId;
     private String grantId;
     private AuditOutcome outcome;
+    // e.g. the drug a pharmacy dispensed; absent for most entries
+    private String detail;
+
+    public AuditEntryView(String id, Instant at, ActorView actor, AuditAction action, String resource, String resourceId,
+                          String grantId, AuditOutcome outcome) {
+        this(id, at, actor, action, resource, resourceId, grantId, outcome, null);
+    }
 }

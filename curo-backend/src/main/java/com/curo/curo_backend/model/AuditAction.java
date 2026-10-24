@@ -5,6 +5,7 @@ public enum AuditAction {
     WRITE,
     QR_SCAN,
     PHARMACY_LOOKUP,
+    PHARMACY_DISPENSE,
     GRANT_REQUESTED,
     GRANT_APPROVED,
     GRANT_REVOKED,

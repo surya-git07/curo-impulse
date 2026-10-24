@@ -4,10 +4,10 @@ import com.curo.curo_backend.dto.DispenseOrderRequest;
 import com.curo.curo_backend.dto.DispenseView;
 import com.curo.curo_backend.model.AppUser;
 import com.curo.curo_backend.model.AuditAction;
+import com.curo.curo_backend.model.AuditOutcome;
 import com.curo.curo_backend.model.DispenseStatus;
 import com.curo.curo_backend.model.DispensingLog;
 import com.curo.curo_backend.model.DrugMaster;
-import com.curo.curo_backend.model.GrantScope;
 import com.curo.curo_backend.model.Pharmacy;
 import com.curo.curo_backend.model.Prescription;
 import com.curo.curo_backend.model.PrescriptionStatus;
@@ -32,6 +32,8 @@ import java.time.ZoneId;
 /**
  * A pharmacist dispenses a prescription: it is marked DISPENSED and a dispensing log entry is written. No stock is checked
  * or reduced. A pharmacist can only dispense as their own pharmacy, and each prescription is dispensed once.
+ * Handing a medicine over needs no access grant from the patient, but every dispense is written to the patient access log,
+ * and the prescription itself must be active, in date and from a verified doctor.
  */
 @Service
 public class DispenseService {
@@ -56,7 +58,7 @@ public class DispenseService {
     private DispensingLogRepository dispensingLogRepository;
 
     @Autowired
-    private AccessGuard accessGuard;
+    private AuditService auditService;
 
     @Autowired
     private DrugCatalog drugCatalog;
@@ -90,8 +92,19 @@ public class DispenseService {
                 && !request.getCareId().trim().equalsIgnoreCase(rx.getCareId())) {
             throw new ApiException(HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND", "No such prescription.");
         }
-        // Dispensing changes the patient's record, so the pharmacy needs a grant covering prescriptions (and the attempt is logged)
-        accessGuard.require(rx.getCareId(), GrantScope.PRESCRIPTIONS, AuditAction.WRITE, "DISPENSE", rx.getId());
+        // No access grant is needed to hand a medicine over, but the patient must still exist
+        AppUser patient = userRepository.findByCareId(rx.getCareId())
+                .filter(u -> "PATIENT".equals(u.getRole()) && u.getDeletedAt() == null)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND", "No such prescription."));
+        String collectedBy = null;
+        if (request.getCollectedByCareId() != null && !request.getCollectedByCareId().isBlank()) {
+            collectedBy = request.getCollectedByCareId().trim().toUpperCase(java.util.Locale.ROOT);
+            boolean caregiverExists = userRepository.findByCareId(collectedBy)
+                    .filter(u -> "CAREGIVER".equals(u.getRole()) && u.getDeletedAt() == null).isPresent();
+            if (!caregiverExists) {
+                throw new ApiException(HttpStatus.NOT_FOUND, "CAREGIVER_NOT_FOUND", "No caregiver with that CareID.");
+            }
+        }
 
         // The prescription must be active and its course must still run today
         ZoneId zone = ZoneId.of(timeZone);
@@ -127,6 +140,7 @@ public class DispenseService {
         entry.setQuantity(quantity);
         entry.setStatus(DispenseStatus.DISPENSED);
         entry.setDispensedByUserId(pharmacist.getId());
+        entry.setCollectedByCareId(collectedBy);
         entry.setAt(now);
         try {
             entry = dispensingLogRepository.save(entry);
@@ -145,6 +159,8 @@ public class DispenseService {
             }
             throw e;
         }
+        // The dispense is done, so a problem writing the audit entry is logged and does not undo or fail it
+        auditService.recordQuietly(patient, pharmacist, AuditAction.PHARMACY_DISPENSE, "DISPENSE", rx.getId(), null, AuditOutcome.ALLOWED, rx.getDrug());
         return new DispenseView(entry.getId(), rx.getId(), pharmacy.getId(), quantity, now, DispenseStatus.DISPENSED, rx.getDrug(), rx.getCareId());
     }
 

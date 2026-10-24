@@ -90,7 +90,7 @@ class DispenseServiceTest {
         ReflectionTestUtils.setField(service, "pharmacyRepository", pharmacyRepo);
         ReflectionTestUtils.setField(service, "prescriptionRepository", h.prescriptionRepository);
         ReflectionTestUtils.setField(service, "dispensingLogRepository", logRepo);
-        ReflectionTestUtils.setField(service, "accessGuard", h.guard);
+        ReflectionTestUtils.setField(service, "auditService", ReflectionTestUtils.getField(h.guard, "auditService"));
         ReflectionTestUtils.setField(service, "drugCatalog", ReflectionTestUtils.getField(h.prescriptionService, "drugCatalog"));
         ReflectionTestUtils.setField(service, "clock", h.clock);
         ReflectionTestUtils.setField(service, "userRepository", h.userRepository);
@@ -165,16 +165,38 @@ class DispenseServiceTest {
     }
 
     @Test
-    void aDispenseIsAuditedAsAWriteOnThatPrescription() {
+    void everyDispenseIsOnThePatientAccessLogWithThePharmacyAndTheDrug() {
         service.dispense(order(1));
 
-        assertThat(h.audit).filteredOn(e -> e.getOutcome() == AuditOutcome.ALLOWED).singleElement().satisfies(e -> {
-            assertThat(e.getAction()).isEqualTo(AuditAction.WRITE);
+        assertThat(h.audit).singleElement().satisfies(e -> {
+            assertThat(e.getAction()).isEqualTo(AuditAction.PHARMACY_DISPENSE);
+            assertThat(e.getOutcome()).isEqualTo(AuditOutcome.ALLOWED);
             assertThat(e.getResource()).isEqualTo("DISPENSE");
             assertThat(e.getResourceId()).isEqualTo(rx.getId());
             assertThat(e.getActorUserId()).isEqualTo("ph1");
+            assertThat(e.getActorName()).isEqualTo("Test Pharmacy");
+            assertThat(e.getActorRole()).isEqualTo("PHARMACY");
             assertThat(e.getPatientId()).isEqualTo("p1");
+            assertThat(e.getCareId()).isEqualTo("CID-7K3MQ9");
+            assertThat(e.getDetail()).isEqualTo("Amoxicillin");
         });
+    }
+
+    @Test
+    void aRefusedDispenseWritesNoDispenseEntry() {
+        rx.setStatus(PrescriptionStatus.DISCONTINUED);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_NOT_ACTIVE");
+        assertThat(h.audit).isEmpty();
+    }
+
+    @Test
+    void aFailureToWriteTheAuditEntryDoesNotUndoACompletedDispense() {
+        var auditService = ReflectionTestUtils.getField(h.guard, "auditService");
+        var repo = (com.curo.curo_backend.repository.AuditLogRepository) ReflectionTestUtils.getField(auditService, "auditLogRepository");
+        when(repo.save(any(com.curo.curo_backend.model.AuditLog.class))).thenThrow(new DataAccessResourceFailureException("down"));
+
+        assertThat(service.dispense(order(1)).getStatus()).isEqualTo(DispenseStatus.DISPENSED);
+        assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.DISPENSED);
     }
 
     // ---- double dispense
@@ -441,7 +463,10 @@ class DispenseServiceTest {
 
     @Test
     void onlyPharmaciesDispense() {
-        for (AppUser other : List.of(h.doctor, h.patient, h.caregiver)) {
+        for (AppUser other : List.of(h.doctor, h.patient, h.caregiver,
+                com.curo.curo_backend.support.Fixtures.user("hx", "HOSPITAL", "Hospital", "CID-6HH6HH"),
+                com.curo.curo_backend.support.Fixtures.user("rx", "RECEPTION", "Reception", "CID-7RR7RR"))) {
+            h.users.put(other.getId(), other);
             signIn(other);
             assertApiError(() -> service.dispense(order(1)), HttpStatus.FORBIDDEN, "FORBIDDEN_ROLE");
         }
@@ -449,31 +474,69 @@ class DispenseServiceTest {
         assertThat(logs).isEmpty();
     }
 
-    // ---- the consent gate
+    // ---- no access grant is needed
 
     @Test
-    void dispensingNeedsAGrantOnThePatientAndAnythingElseIs403NoActiveGrant() {
-        for (Runnable arrange : List.<Runnable>of(
-                () -> h.grants.clear(),
-                () -> { h.grants.clear(); h.grantTo(h.pharmacy, GrantStatus.ACTIVE, T0.minusSeconds(1), GrantScope.PRESCRIPTIONS); },
-                () -> { h.grants.clear(); h.grantTo(h.pharmacy, GrantStatus.REVOKED, T0.plus(Duration.ofDays(1)), GrantScope.PRESCRIPTIONS); },
-                () -> { h.grants.clear(); h.grantTo(h.pharmacy, GrantStatus.PENDING, null, GrantScope.PRESCRIPTIONS); },
-                () -> { h.grants.clear(); h.grantTo(h.pharmacy, GrantScope.PROFILE, GrantScope.MEDICATIONS); })) {
-            arrange.run();
-            assertApiError(() -> service.dispense(order(1)), HttpStatus.FORBIDDEN, "NO_ACTIVE_GRANT");
-            assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.ACTIVE);
-            assertThat(logs).isEmpty();
-        }
-        assertThat(h.audit).anySatisfy(e -> assertThat(e.getOutcome()).isEqualTo(AuditOutcome.DENIED));
+    void dispensingWorksWithoutAnyAccessGrant() {
+        h.grants.clear();
+
+        DispenseView view = service.dispense(order(1));
+
+        assertThat(view.getStatus()).isEqualTo(DispenseStatus.DISPENSED);
+        assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.DISPENSED);
+        assertThat(logs).hasSize(1);
     }
 
     @Test
-    void anotherPharmacysGrantDoesNotCount() {
+    void aSecondDispenseWithoutAGrantIsStillRefused() {
         h.grants.clear();
-        h.users.put("ph2", com.curo.curo_backend.support.Fixtures.user("ph2", "PHARMACY", "Other Pharmacy", "CID-OTHPH2"));
-        h.grantTo(h.users.get("ph2"), GrantScope.PRESCRIPTIONS);
+        service.dispense(order(1));
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "ALREADY_DISPENSED");
+        assertThat(logs).hasSize(1);
+    }
 
-        assertApiError(() -> service.dispense(order(1)), HttpStatus.FORBIDDEN, "NO_ACTIVE_GRANT");
+    @Test
+    void withoutAGrantAnExpiredOrDiscontinuedPrescriptionIsStillRefused() {
+        h.grants.clear();
+        rx.setStatus(PrescriptionStatus.DISCONTINUED);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_NOT_ACTIVE");
+
+        rx.setStatus(PrescriptionStatus.ACTIVE);
+        h.clock.advance(Duration.ofDays(8)); // a 7-day course issued yesterday has ended
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_EXPIRED");
+        assertThat(logs).isEmpty();
+    }
+
+    @Test
+    void aDeletedPatientsPrescriptionIsNotFound() {
+        h.patient.setDeletedAt(T0);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND");
+        assertThat(logs).isEmpty();
+    }
+
+    @Test
+    void theCaregiverWhoCollectsMustExist() {
+        DispenseOrderRequest unknown = order(1);
+        unknown.setCollectedByCareId("CID-ZZZZZ2");
+        assertApiError(() -> service.dispense(unknown), HttpStatus.NOT_FOUND, "CAREGIVER_NOT_FOUND");
+
+        // a CareID that exists but is not a caregiver does not count either
+        DispenseOrderRequest notCaregiver = order(1);
+        notCaregiver.setCollectedByCareId(h.doctor.getCareId());
+        assertApiError(() -> service.dispense(notCaregiver), HttpStatus.NOT_FOUND, "CAREGIVER_NOT_FOUND");
+        assertThat(logs).isEmpty();
+        assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.ACTIVE);
+
+        DispenseOrderRequest ok = order(1);
+        ok.setCollectedByCareId(" " + h.caregiver.getCareId().toLowerCase() + " ");
+        assertThat(service.dispense(ok).getStatus()).isEqualTo(DispenseStatus.DISPENSED);
+        assertThat(logs.get(0).getCollectedByCareId()).isEqualTo(h.caregiver.getCareId());
+    }
+
+    @Test
+    void collectedByIsOptional() {
+        service.dispense(order(1));
+        assertThat(logs.get(0).getCollectedByCareId()).isNull();
     }
 
     // ---- DISPENSED is still a current medication

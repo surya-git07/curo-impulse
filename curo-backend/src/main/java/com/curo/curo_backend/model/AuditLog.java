@@ -43,5 +43,8 @@ public class AuditLog {
 
     private AuditOutcome outcome;
 
+    // optional short note on what was touched, e.g. the drug handed over by a pharmacy; never more than a name
+    private String detail;
+
     private Instant at;
 }
