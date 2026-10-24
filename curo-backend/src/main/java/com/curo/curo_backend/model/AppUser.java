@@ -6,6 +6,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 @Data
@@ -55,6 +56,18 @@ public class AppUser {
 
     // patient's recorded allergies, as free text ("Penicillin", "NSAIDs"); used by the allergy check
     private List<String> allergies;
+
+    // optional patient profile fields; only the patient sets them, and clinicians see them only through a PROFILE grant
+    private LocalDate dateOfBirth;
+
+    // MALE, FEMALE or OTHER
+    private String gender;
+
+    // A+, A-, B+, B-, AB+, AB-, O+ or O-
+    private String bloodGroup;
+
+    // "Any other disease", as free text entries
+    private List<String> chronicConditions;
 
     private boolean profileCompleted = false;
 

@@ -145,9 +145,27 @@ class DemoSeederTest {
     void exactlyOnePatientHasAPenicillinAllergy() {
         seeder.seed();
 
-        List<AppUser> allergic = withRole("PATIENT").stream().filter(p -> p.getAllergies() != null && !p.getAllergies().isEmpty()).toList();
-        assertThat(allergic).hasSize(1);
-        assertThat(allergic.get(0).getAllergies()).containsExactly("Penicillin");
+        List<AppUser> penicillin = withRole("PATIENT").stream()
+                .filter(p -> p.getAllergies() != null && p.getAllergies().contains("Penicillin")).toList();
+        assertThat(penicillin).hasSize(1);
+        assertThat(penicillin.get(0).getAllergies()).containsExactly("Penicillin");
+    }
+
+    @Test
+    void demoPatientOneHasAFakeClinicalProfileAndNobodyElseDoes() {
+        seeder.seed();
+
+        AppUser one = byCareId(DemoSeeder.P1);
+        assertThat(one.getBloodGroup()).isEqualTo("B+");
+        assertThat(one.getAllergies()).isNotEmpty();
+        assertThat(one.getChronicConditions()).isNotEmpty();
+        assertThat(one.getGender()).isNotNull();
+        assertThat(one.getDateOfBirth()).isNotNull();
+        // the other patients are unchanged
+        for (String careId : List.of(DemoSeeder.P2, DemoSeeder.P3, DemoSeeder.P4, DemoSeeder.P5)) {
+            assertThat(byCareId(careId).getBloodGroup()).as(careId).isNull();
+            assertThat(byCareId(careId).getChronicConditions()).as(careId).isNull();
+        }
     }
 
     @Test

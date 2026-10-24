@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface UserRepository extends MongoRepository<AppUser, String> {
@@ -15,5 +16,6 @@ public interface UserRepository extends MongoRepository<AppUser, String> {
     boolean existsByPhone(String phone);
     boolean existsByLicenceNumber(String licenceNumber);
     boolean existsByDrugLicenceNumber(String drugLicenceNumber);
+    List<AppUser> findByRoleAndVerificationStatusAndDeletedAtIsNull(String role, VerificationStatus status);
     Page<AppUser> findByVerificationStatusAndDeletedAtIsNull(VerificationStatus status, Pageable pageable);
 }

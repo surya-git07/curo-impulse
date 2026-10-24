@@ -74,6 +74,7 @@ public class SecurityConfig {
                         // New patient-data endpoints decide access in AccessGuard, so /patient/** is no longer public
                         .requestMatchers("/patient/me", "/patient/me/**").hasRole("PATIENT")
                         .requestMatchers("/doses/**").hasRole("PATIENT")
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/summary").hasRole("DOCTOR")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/medications").hasAnyRole("DOCTOR", "PHARMACY", "CAREGIVER")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/patient/*/dose-schedule").hasAnyRole("DOCTOR", "CAREGIVER")
                         .requestMatchers("/caregiver-links", "/caregiver-links/**").hasAnyRole("PATIENT", "CAREGIVER")
@@ -82,6 +83,9 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/auth/signup", "/auth/login").permitAll()
                         .requestMatchers("/hospital/**", "/pharmacy-facility/**").permitAll()
                         .requestMatchers("/drugs/**").hasAnyRole("DOCTOR", "ADMIN", "PHARMACY")
+                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/reception/check-in").hasRole("RECEPTION")
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/reception/doctors").hasRole("RECEPTION")
+                        .requestMatchers("/doctor/queue", "/doctor/queue/**").hasRole("DOCTOR")
                         .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/reception/visit/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/reception/queue/**").hasAnyRole("DOCTOR", "RECEPTION", "ADMIN")
                         .requestMatchers("/reception/**").hasAnyRole("RECEPTION", "ADMIN")

@@ -405,13 +405,13 @@ public class PrescriptionService {
         p.setCurrentVersion(v.getVersion());
     }
 
-    private PrescriptionView view(Prescription p, boolean withVersions) {
+    static PrescriptionView view(Prescription p, boolean withVersions) {
         return new PrescriptionView(p.getId(), p.getCareId(), p.getDoctorId(), p.getDrug(), p.getDose(), p.getDuration(),
                 p.getDurationDays(), p.getFrequency(), p.getSchedule(), p.getStatus(), p.getIssuedAt(), p.getDiscontinuedAt(),
                 p.getCurrentVersion(), withVersions ? versions(p) : null);
     }
 
-    private List<VersionView> versions(Prescription p) {
+    static List<VersionView> versions(Prescription p) {
         return p.getVersions().stream()
                 .map(v -> new VersionView(v.getVersion(), v.getChangeType(), v.getDose(), v.getDuration(), v.getDurationDays(),
                         v.getFrequency(), v.getSchedule(), v.getReason(),

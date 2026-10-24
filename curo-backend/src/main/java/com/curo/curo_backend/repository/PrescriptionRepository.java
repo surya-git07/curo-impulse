@@ -8,4 +8,6 @@ import java.util.List;
 
 public interface PrescriptionRepository extends MongoRepository<Prescription, String> {
     List<Prescription> findByCareIdAndStatus(String careId, PrescriptionStatus status);
+
+    List<Prescription> findByCareIdOrderByIssuedAtDesc(String careId);
 }

@@ -56,17 +56,21 @@ public class MedicationService {
     }
 
     private MedicationProfile profile(String careId, List<String> allergies) {
+        return new MedicationProfile(careId, clock.instant(), currentMedications(careId), allergies == null ? null : List.copyOf(allergies));
+    }
+
+    /** The current medications (not discontinued, course not over), oldest first. Callers must already have checked consent. */
+    List<MedicationView> currentMedications(String careId) {
         Instant now = clock.instant();
         ZoneId zone = ZoneId.of(timeZone);
         LocalDate today = now.atZone(zone).toLocalDate();
 
-        List<MedicationView> medications = Courses.live(prescriptionRepository, careId).stream()
+        return Courses.live(prescriptionRepository, careId).stream()
                 .filter(p -> Courses.isCurrent(p, today, zone))
                 .sorted(Comparator.comparing(Prescription::getIssuedAt).thenComparing(Prescription::getDrug))
                 .map(p -> new MedicationView(p.getId(), p.getDrug(), p.getDose(), p.getFrequency(), p.getSchedule(),
                         Courses.startDate(p, zone), Courses.endDate(p, zone).orElse(null), p.getStatus(), p.getCurrentVersion(),
                         new MedicationView.Prescriber(p.getDoctorName(), p.getDoctorFacilityName())))
                 .toList();
-        return new MedicationProfile(careId, now, medications, allergies == null ? null : List.copyOf(allergies));
     }
 }

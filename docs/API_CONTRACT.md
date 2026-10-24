@@ -15,6 +15,8 @@ Derived by reading the old apps in `_reference/` (hospital-backend, hospital-sit
 
 **Changes since v0.3 (build-status audit):** every endpoint in this file was checked against the controllers on `main`. Those with no active mapping are marked **NOT BUILT** (in the Status column, or in the heading). Most of them exist only as disabled legacy code (`@Profile("legacy-jpa")`, which is off by default), so a client that calls them gets 404 or 403 today. `GET /auth/me` is the one endpoint added in this pass. `GET /patient/me/prescriptions/detailed` is NOT BUILT and replaced by `GET /patient/me/medications` (section 12). Only `/auth/signup` and `/auth/login` are public under `/auth`.
 
+**Changes since v0.3 (reception check-in):** `POST /reception/check-in`, `GET /doctor/queue` and `PATCH /doctor/queue/{id}/done` are built (section 6). They use a new `queue_entries` collection. The older `/reception/checkin`, `/reception/queue/{hospitalId}` and `/reception/visit/{id}` rows stay NOT BUILT and are superseded by these.
+
 **Changes since v0.3 (RECEPTION signup):** `POST /auth/signup` accepts role `RECEPTION` (front desk). It is a self-signup role like PATIENT: no licence or council fields, no approval, it can sign in straight away. It is a different role from `ADMIN`, which is not a signup role. RECEPTION cannot prescribe, dispense, request access or read patient data. The frontend dropdown is Reception, Doctor, Pharmacy, Hospital. This replaces the earlier note that Reception never self-signs-up.
 
 **Changes since v0.3 (HOSPITAL signup):** `POST /auth/signup` accepts role `HOSPITAL` (section 2). A hospital account is a facility login only: it cannot prescribe, dispense, request access or read patient data. Signup in the frontend offers Doctor, Pharmacy and Hospital. The licence registry also holds `CLINIC` and `HOSPITAL` entries.
@@ -480,6 +482,18 @@ Change: `?adminUsername=` query param is removed; the verifying admin comes from
 
 ## 6. Check-in and queue (old "reception")
 
+**Built (as of the reception check-in change).** The queue is a plain list of who is waiting. It carries no medical data and **grants nobody access to a patient record**: a doctor who opens a patient from the queue still gets `403 NO_ACTIVE_GRANT` until the patient has approved access (section 3).
+
+| Status | Method + path | Auth | Request | Response |
+|---|---|---|---|---|
+| NEW | `POST /reception/check-in` | RECEPTION only (every other role 403) | `{ "careId": "CID-7K3MQ9" }` | `201 { careId, patientName, status:"WAITING", checkedInAt }`. 404 `PATIENT_NOT_FOUND` for an unknown CareID or one that is not a patient; 409 `ALREADY_IN_QUEUE` if the patient is already WAITING today. Writes an audit entry (`WRITE` of `QUEUE_ENTRY`) to the patient's access log |
+| NEW | `GET /doctor/queue` | DOCTOR only | none | `{ counts:{total,done,pending}, entries:[{id,careId,patientName,status,checkedInAt}] }` for today (Indian calendar day), earliest first |
+| NEW | `PATCH /doctor/queue/{id}/done` | DOCTOR only | none | the entry with `status:"DONE"`. Repeating it is fine. 404 `QUEUE_ENTRY_NOT_FOUND` |
+
+`queue_entries` fields: `careId`, `patientName`, `status` (`WAITING` or `DONE`), `checkedInAt` (server UTC), `checkedInBy` (reception user id), `facilityId` (may be empty). **Every doctor sees every entry for now**: there is no facility scoping yet. A `PATIENT_NOT_FOUND` answer tells the front desk whether a CareID belongs to a patient, which is intended for check-in.
+
+The older routes below are superseded by these and remain NOT BUILT.
+
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
 | CHANGE, **NOT BUILT** | `POST /reception/checkin` | RECEPTION (front desk) or DOCTOR | `{careId,hospitalId,doctorId,patientName,age,gender}` (old key `abha`) | Visit `{id,careId,hospitalId,doctorId,status:"WAITING",checkedInAt}`. 409 if already waiting. Not a grant-gated endpoint; the doctor still needs a grant to open the patient's data |
@@ -711,15 +725,31 @@ All outside messages go through one `NotificationSender` interface, so alert log
 
 | Status | Method + path | Auth | Request | Response |
 |---|---|---|---|---|
-| CHANGE, **NOT BUILT** | `GET /patient/{careId}/summary` | DOCTOR, PHARMACY (old: public). Grant-gated (`PROFILE`) | none | `{careId,name,allergies,conditions}`. Old fallback `{offline:true}` removed; use 503 |
+| CHANGE | `GET /patient/{careId}/summary` | DOCTOR only (the old row also listed PHARMACY; not built). Grant-gated (`PROFILE`; 403 `NO_ACTIVE_GRANT` without one, and nothing about the patient is read) | none | the doctor Patient screen, below |
 | CHANGE, **NOT BUILT** | `GET /patient/{careId}/history` | DOCTOR (old: public). Grant-gated (`PRESCRIPTIONS`) | none | `[{drug,dose,duration,issuedAt,status,drugClass,riskFlag}]` |
 | KEEP | `GET /patient/me` | PATIENT | none | `{id,careId,name,phone,allergies,profileCompleted,...}` |
-| KEEP | `PUT /patient/me` | PATIENT | `{name,allergies,conditions,dob,bloodGroup}` | updated profile. **As built: only `allergies` can be changed** (trimmed, blanks and repeats dropped, at most 30 entries of 60 characters each); the other fields are not stored yet and are ignored |
+| KEEP | `PUT /patient/me` | PATIENT | any of `{allergies, chronicConditions, dateOfBirth, gender, bloodGroup}`; at least one | updated profile `{id,careId,name,phone,allergies,profileCompleted,dateOfBirth?,gender?,bloodGroup?,chronicConditions}`. A field not sent is left as it is; a list sent as `[]` clears it. Lists: trimmed, blanks and repeats dropped, at most 30 entries of 60 characters. `gender` is `MALE`, `FEMALE` or `OTHER`; `bloodGroup` is `A+`, `A-`, `B+`, `B-`, `AB+`, `AB-`, `O+` or `O-`; `dateOfBirth` is `YYYY-MM-DD`, in the past and after 1900. A bad value is `400 VALIDATION_ERROR` and changes nothing. `name` cannot be changed yet |
 | CHANGE, **NOT BUILT** | `DELETE /patient/me` | PATIENT | none | **204, soft delete.** See below |
 | KEEP, **NOT BUILT** | `POST /patient/me/push-token` | PATIENT | `{pushToken}` (old: query param) | 204 |
 | KEEP, **NOT BUILT** | `GET /patient/me/prescriptions/detailed` | PATIENT | none | **NOT BUILT. Replaced by `GET /patient/me/medications` (section 8); do not call it.** Its old fields `drugName`, `dosage`, `durationDays`, `hospitalName`, `doctorName`, `createdAt`, `dispensedAt`, `visitId`, `awareCategory`, `isAntibiotic`, `allergyConflict` and `notRecommended` are not returned anywhere today; the only one that carries over is `currentVersion` |
 | NEW | `POST /patient/me/share-codes` | PATIENT | see section 3 | see section 3 |
 | NEW | `GET /patient/me/access-log` | PATIENT | see section 3 | see section 3 |
+
+**Doctor Patient screen (`GET /patient/{careId}/summary`, built)**
+```json
+{
+  "careId": "CID-DMPAT2",
+  "name": "Demo Patient One",
+  "ageYears": 46,
+  "gender": "MALE",
+  "bloodGroup": "B+",
+  "allergies": ["Latex"],
+  "chronicConditions": ["Type 2 diabetes"],
+  "medications": [ { "prescriptionId": "665f...", "drug": "Warfarin", "dose": "5 mg", "status": "ACTIVE", "currentVersion": 1 } ],
+  "prescriptions": [ { "id": "665f...", "drug": "Warfarin", "status": "ACTIVE", "issuedAt": "2026-10-01T05:00:00Z", "currentVersion": 1, "versions": [ { "version": 1, "changeType": "ISSUED" } ] } ]
+}
+```
+Only a DOCTOR with an **active PROFILE grant** gets this; otherwise `403 NO_ACTIVE_GRANT` with no profile fields. The check is audited as a `READ` of `PROFILE`. `medications` (the current-medication list of section 8) is included only if the grant also covers `MEDICATIONS`, and `prescriptions` (every prescription, newest first, each with its `versions[]`) only if it covers `PRESCRIPTIONS`; a part the grant does not cover is left out. `ageYears`, `gender` and `bloodGroup` are left out when the patient has not set them; `allergies` and `chronicConditions` are `[]` when empty. The date of birth and phone are never returned. These profile fields are optional and set by the patient with `PUT /patient/me`.
 
 **Soft delete (`DELETE /patient/me`)**
 - Sets `status:"DELETED"` and `deletedAt`; does not remove the record. Idempotent: a second call returns 204.

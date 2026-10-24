@@ -30,6 +30,7 @@ import org.springframework.stereotype.Component;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -116,6 +117,16 @@ public class DemoSeeder implements ApplicationRunner {
         Instant now = clock.instant();
 
         AppUser p1 = patient(P1, "9000000101", "Demo Patient One", null, now);
+        // CID-DMPAT2 gets a fake clinical profile for the doctor Patient screen. It is filled in once, only while the blood
+        // group is missing, so an existing demo database is topped up and nothing else (or anyone else) is touched.
+        if (p1.getBloodGroup() == null) {
+            p1.setBloodGroup("B+");
+            p1.setGender("MALE");
+            p1.setDateOfBirth(LocalDate.of(1980, 5, 14));
+            p1.setAllergies(List.of("Latex"));
+            p1.setChronicConditions(List.of("Type 2 diabetes"));
+            p1 = userRepository.save(p1);
+        }
         AppUser p2 = patient(P2, "9000000102", "Demo Patient Two", List.of("Penicillin"), now);
         patient(P3, "9000000103", "Demo Patient Three", null, now);
         patient(P4, "9000000104", "Demo Patient Four", null, now);
