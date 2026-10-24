@@ -73,6 +73,7 @@ public class PrescriptionHarness {
     public final PrescriptionRepository prescriptionRepository = mock(PrescriptionRepository.class);
     public final AccessGuard guard = new AccessGuard();
     public final PrescriptionService prescriptionService = new PrescriptionService();
+    public final UserRepository userRepository = mock(UserRepository.class);
     public final MedicationService medicationService = new MedicationService();
     public final TableInteractionChecker checker = new TableInteractionChecker();
     public final List<DoseLog> doseLogs = new ArrayList<>();
@@ -89,7 +90,7 @@ public class PrescriptionHarness {
             users.put(u.getId(), u);
         }
 
-        UserRepository userRepo = mock(UserRepository.class);
+        UserRepository userRepo = userRepository;
         when(userRepo.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(users.get(inv.<String>getArgument(0))));
         when(userRepo.findByCareId(anyString())).thenAnswer(inv -> users.values().stream()
                 .filter(u -> inv.getArgument(0).equals(u.getCareId())).findFirst());

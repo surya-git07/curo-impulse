@@ -14,6 +14,7 @@ import com.curo.curo_backend.model.PrescriptionStatus;
 import com.curo.curo_backend.repository.DispensingLogRepository;
 import com.curo.curo_backend.repository.PharmacyRepository;
 import com.curo.curo_backend.repository.PrescriptionRepository;
+import com.curo.curo_backend.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,6 +64,9 @@ public class DispenseService {
     @Autowired
     private Clock clock;
 
+    @Autowired
+    private UserRepository userRepository;
+
     public DispenseView dispense(DispenseOrderRequest request) {
         AppUser pharmacist = requirePharmacist();
         Pharmacy pharmacy = pharmacyOf(pharmacist);
@@ -80,19 +84,35 @@ public class DispenseService {
 
         Prescription rx = prescriptionRepository.findById(request.getPrescriptionId().trim())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND", "No such prescription."));
+        // The CareID being served, if the caller names one, must be this prescription's patient. The answer is the same as for an
+        // unknown id, so a wrong CareID reveals nothing about the prescription.
+        if (request.getCareId() != null && !request.getCareId().isBlank()
+                && !request.getCareId().trim().equalsIgnoreCase(rx.getCareId())) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND", "No such prescription.");
+        }
         // Dispensing changes the patient's record, so the pharmacy needs a grant covering prescriptions (and the attempt is logged)
         accessGuard.require(rx.getCareId(), GrantScope.PRESCRIPTIONS, AuditAction.WRITE, "DISPENSE", rx.getId());
+
+        // The prescription must be active and its course must still run today
+        ZoneId zone = ZoneId.of(timeZone);
+        Instant now = clock.instant();
+        LocalDate today = now.atZone(zone).toLocalDate();
+        if (!rx.getStatus().isLive()) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRESCRIPTION_NOT_ACTIVE", "This prescription has been discontinued.");
+        }
+        if (Courses.endDate(rx, zone).map(end -> today.isAfter(end)).orElse(false)) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRESCRIPTION_EXPIRED", "This prescription's course has ended.");
+        }
 
         if (request.getDrug() != null && !request.getDrug().isBlank() && !sameDrug(request.getDrug(), rx.getDrug())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "DRUG_MISMATCH", "That is not the drug on this prescription.");
         }
-        ZoneId zone = ZoneId.of(timeZone);
-        Instant now = clock.instant();
-        LocalDate today = now.atZone(zone).toLocalDate();
         // One dispense per prescription: a second one would hand out a second course of the drug
         if (rx.getStatus() == PrescriptionStatus.DISPENSED || dispensingLogRepository.existsByPrescriptionIdAndStatus(rx.getId(), DispenseStatus.DISPENSED)) {
             throw alreadyDispensed();
         }
+        // The issuing doctor's licence must be verified before this can go ahead
+        verifyIssuer(rx);
         if (rx.getStatus() != PrescriptionStatus.ACTIVE || !Courses.isCurrent(rx, today, zone)) {
             throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "This prescription is discontinued or its course has ended.");
         }
@@ -178,5 +198,13 @@ public class DispenseService {
             throw new ApiException(HttpStatus.FORBIDDEN, "PHARMACY_NOT_VERIFIED", "Your pharmacy has not been verified yet.");
         }
         return pharmacy;
+    }
+
+    private void verifyIssuer(Prescription rx) {
+        AppUser issuingDoctor = userRepository.findById(rx.getDoctorId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "DOCTOR_NOT_FOUND", "The issuing doctor was not found."));
+        if (issuingDoctor.getVerificationStatus() != com.curo.curo_backend.model.VerificationStatus.VERIFIED) {
+            throw new ApiException(HttpStatus.CONFLICT, "DOCTOR_NOT_VERIFIED", "The issuing doctor's licence is not verified.");
+        }
     }
 }

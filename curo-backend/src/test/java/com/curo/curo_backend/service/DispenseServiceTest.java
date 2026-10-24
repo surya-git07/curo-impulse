@@ -14,11 +14,14 @@ import com.curo.curo_backend.model.DispensingLog;
 import com.curo.curo_backend.model.GrantScope;
 import com.curo.curo_backend.model.GrantStatus;
 import com.curo.curo_backend.model.Pharmacy;
+import com.curo.curo_backend.model.PrescriptionStatus;
+import com.curo.curo_backend.model.VerificationStatus;
 import com.curo.curo_backend.model.Prescription;
 import com.curo.curo_backend.model.PrescriptionStatus;
 import com.curo.curo_backend.model.Severity;
 import com.curo.curo_backend.repository.DispensingLogRepository;
 import com.curo.curo_backend.repository.PharmacyRepository;
+import com.curo.curo_backend.repository.UserRepository;
 import com.curo.curo_backend.support.PrescriptionHarness;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,8 +93,10 @@ class DispenseServiceTest {
         ReflectionTestUtils.setField(service, "accessGuard", h.guard);
         ReflectionTestUtils.setField(service, "drugCatalog", ReflectionTestUtils.getField(h.prescriptionService, "drugCatalog"));
         ReflectionTestUtils.setField(service, "clock", h.clock);
+        ReflectionTestUtils.setField(service, "userRepository", h.userRepository);
 
         rx = h.existing("Amoxicillin", T0.minus(Duration.ofHours(1)), 7, PrescriptionStatus.ACTIVE);
+        h.users.get("d1").setVerificationStatus(VerificationStatus.VERIFIED);
         h.grantTo(h.pharmacy, GrantScope.PRESCRIPTIONS);
         signIn(h.pharmacy);
     }
@@ -261,18 +266,108 @@ class DispenseServiceTest {
         verify(logRepo).delete(any(DispensingLog.class));
     }
 
-    // ---- state and request checks
+    // ---- issuer and course checks (new validation added before the existing drug match)
+
+    private Prescription freshRx() {
+        return h.existing("Amoxicillin", T0.minus(Duration.ofHours(1)), 7, PrescriptionStatus.ACTIVE);
+    }
+
+    @Test
+    void aDiscontinuedPrescriptionThrowsNotActive() {
+        rx = freshRx();
+        h.users.get("d1").setVerificationStatus(VerificationStatus.VERIFIED);
+        h.grantTo(h.pharmacy, GrantScope.PRESCRIPTIONS);
+        signIn(h.pharmacy);
+        rx.setStatus(PrescriptionStatus.DISCONTINUED);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_NOT_ACTIVE");
+        assertThat(logs).isEmpty();
+    }
+
+    @Test
+    void anExpiredPrescriptionThrowsExpired() {
+        rx = freshRx();
+        h.clock.advance(Duration.ofDays(8)); // past the 7-day course
+        h.users.get("d1").setVerificationStatus(VerificationStatus.VERIFIED);
+        // the default test grant ends a day after the start, so grant again for long enough to reach the course check
+        h.grantTo(h.pharmacy, GrantStatus.ACTIVE, T0.plus(Duration.ofDays(30)), GrantScope.PRESCRIPTIONS);
+        signIn(h.pharmacy);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_EXPIRED");
+        assertThat(logs).isEmpty();
+    }
+
+    @Test
+    void anUnverifiedIssuerThrowsDoctorNotVerified() {
+        rx = freshRx();
+        h.users.get("d1").setVerificationStatus(VerificationStatus.PENDING);
+        h.grantTo(h.pharmacy, GrantScope.PRESCRIPTIONS);
+        signIn(h.pharmacy);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "DOCTOR_NOT_VERIFIED");
+        assertThat(logs).isEmpty();
+    }
+
+    @Test
+    void anIssuerWhoseLicenceIsVerifiedCanDispense() {
+        rx = freshRx();
+        h.users.get("d1").setVerificationStatus(VerificationStatus.VERIFIED);
+        h.grantTo(h.pharmacy, GrantScope.PRESCRIPTIONS);
+        signIn(h.pharmacy);
+
+        DispenseView view = service.dispense(order(1));
+        assertThat(view.getStatus()).isEqualTo(DispenseStatus.DISPENSED);
+        assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.DISPENSED);
+
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "ALREADY_DISPENSED");
+        assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.DISPENSED);
+        assertThat(logs).hasSize(1);
+    }
+
+    @Test
+    void anUnknownPrescriptionIsNotFound() {
+        DispenseOrderRequest r = order(1);
+        r.setPrescriptionId("no-such-id");
+        assertApiError(() -> service.dispense(r), HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND");
+        assertThat(logs).isEmpty();
+    }
+
+    @Test
+    void aPrescriptionOfAnotherCareIdIsNotFoundAndNothingIsRecorded() {
+        DispenseOrderRequest r = order(1);
+        r.setCareId("CID-ZZZZZ2"); // not this prescription's patient
+        int auditBefore = h.audit.size();
+        assertApiError(() -> service.dispense(r), HttpStatus.NOT_FOUND, "PRESCRIPTION_NOT_FOUND");
+        assertThat(logs).isEmpty();
+        assertThat(rx.getStatus()).isEqualTo(PrescriptionStatus.ACTIVE);
+        // refused before the grant check, so it reveals nothing and writes nothing
+        assertThat(h.audit).hasSize(auditBefore);
+    }
+
+    @Test
+    void theRightCareIdIsAcceptedInAnyCase() {
+        DispenseOrderRequest r = order(1);
+        r.setCareId(" cid-7k3mq9 ");
+        assertThat(service.dispense(r).getStatus()).isEqualTo(DispenseStatus.DISPENSED);
+    }
+
+    @Test
+    void anAlreadyDispensedPrescriptionSaysSoEvenIfTheIssuerIsNoLongerVerified() {
+        service.dispense(order(1));
+        h.users.get("d1").setVerificationStatus(VerificationStatus.PENDING);
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "ALREADY_DISPENSED");
+        assertThat(logs).hasSize(1);
+    }
+
+    // ---- state and request checks (back to the original class)
 
     @Test
     void aDiscontinuedOrFinishedPrescriptionCannotBeDispensed() {
         rx.setStatus(PrescriptionStatus.DISCONTINUED);
-        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "INVALID_STATE");
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_NOT_ACTIVE");
 
         rx.setStatus(PrescriptionStatus.ACTIVE);
         h.clock.advance(Duration.ofDays(8)); // a 7-day course issued yesterday has ended
         h.grants.clear();
         h.grantTo(h.pharmacy, GrantStatus.ACTIVE, T0.plus(Duration.ofDays(30)), GrantScope.PRESCRIPTIONS);
-        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "INVALID_STATE");
+        assertApiError(() -> service.dispense(order(1)), HttpStatus.CONFLICT, "PRESCRIPTION_EXPIRED");
         assertThat(logs).isEmpty();
     }
 
