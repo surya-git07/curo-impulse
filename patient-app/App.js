@@ -18,6 +18,7 @@ import ConsentApproval from './ConsentApproval';
 import * as api from './api';
 import { MOCK_MODE } from './config';
 import { findInteractions, findAllergyConflicts } from './ruleChecks';
+import { toActivePrescriptions, formatDay } from './groupMeds';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, type, card as cardStyle, shadow } from './theme';
 import {
@@ -39,7 +40,7 @@ function groupByVisit(prescriptions) {
   prescriptions.forEach((p) => {
     const key = p.visitId || p.id;
     if (!groups[key]) {
-      groups[key] = { doctorName: p.doctorName, hospitalName: p.hospitalName, createdAt: p.createdAt, drugs: [] };
+      groups[key] = { doctorName: p.doctorName, hospitalName: p.hospitalName, createdAt: p.createdAt, issueDay: p.issueDay || null, drugs: [] };
     }
     groups[key].drugs.push(p);
   });
@@ -386,15 +387,17 @@ function AppInner() {
     const match = p.drugName?.toLowerCase().includes(q) || p.doctorName?.toLowerCase().includes(q) || p.hospitalName?.toLowerCase().includes(q);
     return match && (!antibioticOnly || p.isAntibiotic);
   });
-  const active = homePrescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
+  const mockActive = homePrescriptions.filter((p) => !p.status?.toLowerCase().includes('dispensed'));
   // Interaction and allergy checks: computed from the real medicine list and allergies
   // when they loaded from the server; otherwise the mock demo data, as before.
   const liveMeds = medications !== null;
   const interactions = liveMeds ? findInteractions(medications.map((m) => m.drug)) : MOCK_INTERACTIONS;
   const conflicts = liveMeds && profileLive
     ? findAllergyConflicts(medications.map((m) => m.drug), patient.allergies)
-    : active.filter((p) => p.allergyConflict).map((p) => ({ drug: p.drugName, allergy: null }));
+    : mockActive.filter((p) => p.allergyConflict).map((p) => ({ drug: p.drugName, allergy: null }));
   const conflictDrugs = [...new Set(conflicts.map((c) => c.drug))];
+  // Active Prescriptions: the live medicine list when it loaded, otherwise the mock demo list.
+  const active = liveMeds ? toActivePrescriptions(medications, conflictDrugs) : mockActive;
   const activeVisits = groupByVisit(active);
   const historyVisits = groupByVisit(filtered);
   const takenCount = schedule.filter((d) => d.taken).length;
@@ -457,23 +460,6 @@ function AppInner() {
                   {conflictDrugs.length === 1 ? `${conflictDrugs[0]} conflicts with your recorded allergies${conflicts[0].allergy ? ` (${conflicts.map((c) => c.allergy).join(', ')})` : ''}.` : `${conflictDrugs.length} active medicines conflict with your allergies.`} Contact your doctor before taking.
                 </Text>
               </View>
-            ) : null}
-
-            {/* Current medicines (live only) */}
-            {medications && medications.length > 0 ? (
-              <>
-                <Text style={styles.sectionTitle}>Current medicines</Text>
-                {medications.map((m) => (
-                  <View key={m.id} style={[styles.card, styles.medCard]}>
-                    <View style={styles.medIcon}><Text>💊</Text></View>
-                    <View style={{ flex: 1 }}>
-                    <Text style={styles.drugName}>{m.drug}</Text>
-                    <Text style={styles.cardValue}>{m.dose}{m.times.length > 0 ? ` · ${m.times.join(', ')}` : ''}</Text>
-                    {m.endDate ? <Text style={styles.cardValueFaint}>Until {m.endDate}</Text> : null}
-                    </View>
-                  </View>
-                ))}
-              </>
             ) : null}
 
             {active.length === 0 ? (
@@ -551,6 +537,7 @@ function AppInner() {
         {/* SETTINGS */}
         {tab === 'settings' && !overlay && (
           <>
+            <TouchableOpacity onPress={() => setTab('home')}><Text style={styles.backLink}>‹ Back to Home</Text></TouchableOpacity>
             <View style={[styles.card, styles.profileRow]}>
               <View style={styles.settingsAvatar}><Text style={styles.settingsAvatarText}>{(patient.name || '?').charAt(0).toUpperCase()}</Text></View>
               <View style={{ flex: 1 }}>
@@ -642,7 +629,7 @@ function VisitCard({ visit, open, onToggle, badgeStyleFor, showFlags }) {
       <TouchableOpacity onPress={onToggle} activeOpacity={0.75}>
         <Text style={styles.visitDoctor}>{visit.doctorName || 'Unknown Doctor'}</Text>
         <Text style={styles.visitHospital}>{visit.hospitalName || 'Unknown Hospital'}</Text>
-        <Text style={styles.visitDate}>{formatVisitDate(visit.createdAt)}</Text>
+        <Text style={styles.visitDate}>{visit.issueDay ? 'Prescribed ' + formatDay(visit.issueDay) : formatVisitDate(visit.createdAt)}</Text>
       </TouchableOpacity>
       {open && (
         <View style={styles.visitDrugs}>
@@ -656,7 +643,7 @@ function VisitCard({ visit, open, onToggle, badgeStyleFor, showFlags }) {
                     <View style={[styles.badge, badgeStyleFor(p.awareCategory)]}><Text style={styles.badgeText}>{p.awareCategory}</Text></View>
                   ) : null}
                 </View>
-                <Text style={styles.cardValue}>{p.dosage} · {p.durationDays} days</Text>
+                <Text style={styles.cardValue}>{p.detail ? p.detail : p.dosage + ' · ' + p.durationDays + ' days'}</Text>
                 <View style={[styles.courseTag, styles[tag.style]]}><Text style={styles.courseTagText}>{tag.label}</Text></View>
                 {showFlags && p.allergyConflict ? <Text style={styles.flag}>⚠️ Conflicts with your allergies</Text> : null}
               </View>
@@ -740,8 +727,6 @@ const styles = StyleSheet.create({
   warnText: { fontSize: 13, color: colors.textMuted, lineHeight: 19 },
   sevPill: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginTop: 10 },
   sevText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  medCard: { flexDirection: 'row', alignItems: 'center' },
-  medIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   emptySub: { ...type.secondary, marginTop: 4, textAlign: 'center' },
 
   // ---- Login (design system) ----

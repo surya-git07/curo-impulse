@@ -159,17 +159,30 @@ export async function getMe(user) {
   return toAppPatient(me, user);
 }
 
+// prescribedBy is { name, hospitalName } (either may be missing); a plain string is taken as the name.
+function parsePrescriber(p) {
+  if (isStr(p)) return { name: p.trim(), hospital: null };
+  if (!p || typeof p !== 'object') return { name: null, hospital: null };
+  return { name: isStr(p.name) ? p.name.trim() : null, hospital: isStr(p.hospitalName) ? p.hospitalName.trim() : null };
+}
+
 export async function getMedications() {
   const path = '/patient/me/medications';
   const res = await request('GET', path);
   if (!res || !Array.isArray(res.medications)) throw shapeError(path, 'medications');
-  return res.medications.map((m) => ({
-    id: m.prescriptionId,
-    drug: m.drug,
-    dose: m.dose,
-    times: Array.isArray(m.times) ? m.times : [],
-    endDate: m.endDate || null, // YYYY-MM-DD, absent when no duration
-  }));
+  return res.medications.map((m) => {
+    const who = parsePrescriber(m.prescribedBy);
+    return {
+      id: m.prescriptionId,
+      drug: m.drug,
+      dose: m.dose,
+      times: Array.isArray(m.times) ? m.times : [],
+      endDate: m.endDate || null, // YYYY-MM-DD, absent when no duration
+      startDate: isStr(m.startDate) ? m.startDate : null, // issue date, YYYY-MM-DD
+      prescriberName: who.name,
+      hospitalName: who.hospital,
+    };
+  });
 }
 
 export async function getTodayDoses() {
