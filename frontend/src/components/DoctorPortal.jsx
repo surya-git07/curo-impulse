@@ -3,9 +3,9 @@ import axios from 'axios';
 import { decodeToken } from '../utils/jwt';
 
 import { API } from '../config';
-import { errorMessage } from '../api';
+import { errorMessage, stripDr } from '../api';
 import RxQrCode from './RxQrCode';
-import { Loading, EmptyState, StatusBadge, SeverityCard, AllergyCard } from './ui';
+import { EmptyState, StatusBadge, SeverityCard } from './ui';
 
 const FREQUENCY_CODE = {
   'Once daily': 'ONCE_DAILY',
@@ -39,6 +39,9 @@ const buildHistoryStats = (history) => {
 function DoctorPortal() {
   const [tab, setTab] = useState('queue');
   const [queue, setQueue] = useState([]);
+  const [queueCounts, setQueueCounts] = useState(null);
+  const [queueErr, setQueueErr] = useState('');
+  const [doneBusy, setDoneBusy] = useState('');
   const [selectedCareId, setSelectedCareId] = useState(null);
   const [summary, setSummary] = useState(null);
   const [history, setHistory] = useState([]);
@@ -77,8 +80,8 @@ const [rxDrugs, setRxDrugs] = useState([{ drug: '', strength: '', frequency: '',
   const token = sessionStorage.getItem('token');
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   const user = decodeToken();
-  const firstName = (user?.username || '').split('.')[0];
-  const displayName = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : 'Doctor';
+  // the stored name may already start with "Dr": strip it so "Dr. {displayName}" never shows "Dr. Dr."
+  const displayName = stripDr(user?.username) || 'Doctor';
   const hospitalId = user?.facilityId;
 
   useEffect(() => {
@@ -88,13 +91,27 @@ const [rxDrugs, setRxDrugs] = useState([{ drug: '', strength: '', frequency: '',
 
   const fetchQueue = async () => {
     try {
-      const doctorId = user?.id;
-      const url = doctorId
-        ? `${API}/reception/queue/${hospitalId}?doctorId=${doctorId}`
-        : `${API}/reception/queue/${hospitalId}`;
-      const res = await axios.get(url, auth);
-      setQueue(res.data);
-    } catch (e) { console.error(e); }
+      const res = await axios.get(`${API}/doctor/queue`, auth);
+      // the API answers { counts: { total, done, pending }, entries: [ ... ] }
+      const d = res.data;
+      setQueue(Array.isArray(d?.entries) ? d.entries : []);
+      setQueueCounts(d?.counts || null);
+      setQueueErr('');
+    } catch (e) {
+      setQueueErr(errorMessage(e, 'Could not load the queue. It will retry automatically.'));
+    }
+  };
+
+  const markDone = async (id) => {
+    setDoneBusy(id);
+    try {
+      await axios.patch(`${API}/doctor/queue/${id}/done`, {}, auth);
+      await fetchQueue();
+    } catch (e) {
+      setQueueErr(errorMessage(e, 'Could not mark this patient as done.'));
+    } finally {
+      setDoneBusy('');
+    }
   };
 
   const fetchDrugs = async () => {
@@ -134,7 +151,7 @@ const fetchProfile = async () => {
   useEffect(() => {
     fetchQueue();
     fetchDrugs();
-    const i = setInterval(fetchQueue, 5000);
+    const i = setInterval(fetchQueue, 10000);
     return () => clearInterval(i);
   }, []);
 
@@ -208,13 +225,6 @@ const fetchProfile = async () => {
     } finally {
       setAccessBusy(false);
     }
-  };
-
-  const removeVisit = async (id) => {
-    try {
-      await axios.delete(`${API}/reception/visit/${id}`, auth);
-      fetchQueue();
-    } catch (e) { console.error(e); }
   };
 
   const removeIssued = async (id) => {
@@ -357,11 +367,17 @@ const addDrugRow = () => {
 
   const initials = (s) => (s || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase();
   const waiting = queue.filter(q => q.status === 'WAITING');
+  // the server's counts for this doctor; worked out from the list only if they are missing
+  const counts = queueCounts || { total: queue.length, done: queue.length - waiting.length, pending: waiting.length };
   const timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   const dateStrShort = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
   const allergyList = Array.isArray(summary?.allergies) ? summary.allergies : [];
-  const conditionList = Array.isArray(summary?.conditions) ? summary.conditions : [];
+  const conditionList = Array.isArray(summary?.chronicConditions) ? summary.chronicConditions
+    : (Array.isArray(summary?.conditions) ? summary.conditions : []);
+  const hasValue = (v) => v !== null && v !== undefined && String(v).trim() !== '';
+  const genderText = hasValue(summary?.gender) ? String(summary.gender).charAt(0).toUpperCase() + String(summary.gender).slice(1).toLowerCase() : '';
+  const ageText = hasValue(summary?.ageYears) ? `${summary.ageYears} years` : '';
 
   const navItems = [
     { key: 'queue', label: 'Queue' },
@@ -381,7 +397,7 @@ const goTab = (t) => {
   return (
     <div className="mt-shell">
       <div className="mt-sidebar">
-        <div className="mt-sidebar-brand">{user?.facilityName || 'Unassigned'} Doctor</div>
+        <div className="mt-sidebar-brand">{sessionStorage.getItem('sector') || 'Doctor'}</div>
         <div className="mt-sidebar-sub">
           Dr. {displayName}{user?.specialization ? ` · ${user.specialization}` : ''}
         </div>
@@ -400,7 +416,7 @@ const goTab = (t) => {
 
         <div className="mt-sidebar-footer">
           <div className="avatar" style={{ background: 'rgba(201, 123, 46, 0.25)', color: '#F5D9B8', width: 30, height: 30 }}>
-            {initials(user?.username)}
+            {initials(stripDr(user?.username))}
           </div>
           <div style={{ textAlign: 'right' }}>
             <div className="mt-sidebar-time">{timeStr}</div>
@@ -450,25 +466,34 @@ const goTab = (t) => {
               <div className="mt-card">
                 <div className="mt-card-title">Today's queue</div>
                 <div className="stat-grid">
-                  <div className="stat-box"><div className="stat-num" style={{ color: '#3C3489' }}>{queue.length}</div><div className="stat-label">Total</div></div>
-                  <div className="stat-box"><div className="stat-num" style={{ color: '#27500A' }}>{queue.length - waiting.length}</div><div className="stat-label">Done</div></div>
-                  <div className="stat-box"><div className="stat-num" style={{ color: '#854F0B' }}>{waiting.length}</div><div className="stat-label">Pending</div></div>
+                  <div className="stat-box"><div className="stat-num" style={{ color: '#3C3489' }}>{counts.total}</div><div className="stat-label">Total</div></div>
+                  <div className="stat-box"><div className="stat-num" style={{ color: '#27500A' }}>{counts.done}</div><div className="stat-label">Done</div></div>
+                  <div className="stat-box"><div className="stat-num" style={{ color: '#854F0B' }}>{counts.pending}</div><div className="stat-label">Pending</div></div>
                 </div>
-                {waiting.length === 0 ? (
-                  <EmptyState icon="☕" title="No patients waiting" text="New check-ins from reception show up here automatically." />
-                ) : waiting.map(v => (
-                  <div key={v.id} className="prow" style={{ cursor: 'pointer' }}>
-                    <div className="avatar" style={{ background: '#E6F1FB', color: '#0C447C' }}>{initials(v.careId)}</div>
-                    <div style={{ flex: 1 }} onClick={() => openPatient(v.careId)}>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{v.careId}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                        Checked in {new Date(v.checkedInAt).toLocaleTimeString()}
+                {queueErr && <div className="alert-box alert-red" role="alert">{queueErr}</div>}
+                {queue.length === 0 ? (
+                  <EmptyState icon="☕" title="No patients in the queue" text="New check-ins from reception show up here automatically." />
+                ) : queue.map(v => {
+                  const isDone = v.status !== 'WAITING';
+                  return (
+                    <div key={v.id} className="prow" style={{ cursor: 'pointer', opacity: isDone ? 0.7 : 1 }}>
+                      <div className="avatar" style={{ background: '#E6F1FB', color: '#0C447C' }}>{initials(v.patientName || v.name || v.careId)}</div>
+                      <div style={{ flex: 1 }} onClick={() => openPatient(v.careId)}>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>{v.patientName || v.name || v.careId}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {(v.patientName || v.name) ? `${v.careId} · ` : ''}Checked in {v.checkedInAt ? new Date(v.checkedInAt).toLocaleTimeString() : ''}
+                        </div>
                       </div>
+                      <StatusBadge status={isDone ? 'DISPENSED' : 'WAITING'}>{isDone ? 'Done' : 'Waiting'}</StatusBadge>
+                      {!isDone && (
+                        <button className="mt-btn mt-btn-green" style={{ padding: '4px 10px', fontSize: 11 }}
+                          onClick={() => markDone(v.id)} disabled={doneBusy === v.id}>
+                          {doneBusy === v.id ? 'Saving…' : 'Mark done'}
+                        </button>
+                      )}
                     </div>
-                    <StatusBadge status="WAITING" />
-                    <button className="mt-btn mt-btn-outline" style={{ padding: '4px 10px', fontSize: 10 }} onClick={() => removeVisit(v.id)}>✕</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -564,7 +589,7 @@ const goTab = (t) => {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-navy)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                        {summary?.name || (grantErr ? 'Name hidden' : 'Loading…')}
+                        {summary?.name || (grantErr ? 'Name hidden' : (summary ? 'Not recorded' : 'Loading…'))}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>CareID: {selectedCareId}</div>
                     </div>
@@ -602,13 +627,38 @@ const goTab = (t) => {
                     </div>
                   </div>
 
-                  <AllergyCard allergies={allergyList} />
-
-                  {/* Comorbidities */}
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '10px 4px' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--text-body, #333)' }}>Any other disease: </span>
-                    {conditionList.length ? conditionList.join(', ') : 'None recorded'}
-                  </div>
+                  {/* Patient details: shown only when the record could be read (an access grant exists) */}
+                  {summary && (
+                    <div className="mt-card">
+                      <div className="mt-card-title">Patient details</div>
+                      <div className="detail-grid">
+                        <div>
+                          <span className="mt-label">Age</span>
+                          <div className="detail-value">{ageText || <span className="detail-missing">Not recorded</span>}</div>
+                        </div>
+                        <div>
+                          <span className="mt-label">Gender</span>
+                          <div className="detail-value">{genderText || <span className="detail-missing">Not recorded</span>}</div>
+                        </div>
+                        <div>
+                          <span className="mt-label">Blood group</span>
+                          <div className="detail-value">{hasValue(summary.bloodGroup) ? summary.bloodGroup : <span className="detail-missing">Not recorded</span>}</div>
+                        </div>
+                      </div>
+                      <span className="mt-label">Allergies</span>
+                      <div style={{ marginBottom: 8 }}>
+                        {allergyList.length
+                          ? allergyList.map((a) => <span key={a} className="chip chip-red">{a}</span>)
+                          : <span className="detail-missing">Not recorded</span>}
+                      </div>
+                      <span className="mt-label">Any other disease</span>
+                      <div>
+                        {conditionList.length
+                          ? conditionList.map((c) => <span key={c} className="chip">{c}</span>)
+                          : <span className="detail-missing">Not recorded</span>}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Current medicines */}
                   <div className="mt-card">
@@ -904,7 +954,7 @@ const goTab = (t) => {
                     fontSize: 18, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif",
                     flexShrink: 0,
                   }}>
-                    {initials(user?.username)}
+                    {initials(stripDr(user?.username))}
                   </div>
                   <div>
                     <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>

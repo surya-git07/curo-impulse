@@ -117,7 +117,7 @@ function PharmacyPortal() {
   return (
     <div className="mt-shell">
       <div className="mt-sidebar">
-        <div className="mt-sidebar-brand">{user?.facilityName || 'Unassigned'}</div>
+        <div className="mt-sidebar-brand">{sessionStorage.getItem('sector') || 'Pharmacy'}</div>
         <div className="mt-sidebar-sub">{user?.username}</div>
 
         <div className="mt-sidebar-nav">

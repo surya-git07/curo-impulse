@@ -1,6 +1,9 @@
 import axios from 'axios';
 import { API } from './config';
 
+// A stored name may already start with "Dr" / "Dr."; remove it (even repeated) before adding our own prefix.
+export const stripDr = (name) => (name || '').replace(/^(\s*dr\b\.?\s*)+/i, '').trim();
+
 export const POLICY_VERSION = '2026-10-01';
 export const CARE_ID_RE = /^CID-[A-HJ-NP-Z2-9]{6}$/;
 

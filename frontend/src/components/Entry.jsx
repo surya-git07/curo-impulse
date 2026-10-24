@@ -74,6 +74,9 @@ function Entry() {
     setLoading(true);
     try {
       const { role } = await login(identifier, password);
+      // remember which sector page they signed in from, for the portal sidebar (the API does not know it)
+      if (typeLabels[facilityType]) sessionStorage.setItem('sector', typeLabels[facilityType]);
+      else sessionStorage.removeItem('sector');
 
       if (role === 'DOCTOR') navigate('/doctor');
       else if (role === 'RECEPTION') navigate('/reception');
